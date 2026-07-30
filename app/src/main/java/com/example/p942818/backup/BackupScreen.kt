@@ -45,7 +45,7 @@ private val CardColors = listOf(
     Color(0xFFF5576C), Color(0xFF4FACFE), Color(0xFF00C9FF)
 )
 
-data class BackupTypeItem(val type: BackupType, var selected: Boolean = true)
+data class BackupTypeItem(val type: BackupType, var selected: Boolean = false)
 
 // ========== 页面模式 ==========
 private enum class PageMode { HOME, APP_PICKER, BACKUP_DETAIL, RESTORE_PICK, RESTORE_CONFIRM }
