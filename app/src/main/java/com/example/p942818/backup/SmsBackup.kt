@@ -34,7 +34,7 @@ object SmsBackup {
         try {
             val cursor: Cursor? = context.contentResolver.query(
                 Uri.parse(SMS_URI), null, null, null,
-                "${Telephony.Sms.DEFAULT_SORT_ORDER} ASC"
+                null
             )
             cursor?.use { c ->
                 val idIdx = c.getColumnIndex(Telephony.Sms._ID)
