@@ -148,15 +148,43 @@ object SmsBackup {
 
     /** ===== 导入/恢复短信 =====
      *  普通App没法直接写系统短信数据库（Android只允许"默认短信App"写入）。
-     *  有提权时用 shell 的 content insert 命令写入，并且把所有记录合并成
-     *  一条shell命令（用分号连接）一次性执行，减少反复调用的开销，同时
-     *  避免"在提权进程内部直接ContentResolver.insert"那种方式在部分设备
-     *  上会卡死的问题（那种方式已经证实会挂起，改回这个稳妥方案） */
+     *  优先级：① 如果本App此刻已经是默认短信App（参考sms-ie项目的做法，
+     *  可以临时申请这个身份），直接用最简单可靠的 ContentResolver 写入；
+     *  ② 否则如果有 Shizuku/Root，走 shell 的 content insert 命令；
+     *  ③ 都没有就只能尝试普通写入（大概率失败）。 */
     fun restoreFromJson(context: Context, jsonFile: File): BackupResult {
         return try {
             val jsonStr = jsonFile.readText()
             val root = JSONObject(jsonStr)
             val messages = root.getJSONArray("messages")
+
+            // ① 已经是默认短信App：这是最正规、最可靠的方式，系统完全允许写入
+            if (SmsRoleHelper.isDefaultSmsApp(context)) {
+                var restoredCount = 0
+                var skippedCount = 0
+                for (i in 0 until messages.length()) {
+                    val msg = messages.getJSONObject(i)
+                    val body = msg.optString("body", "")
+                    val address = msg.optString("address", "")
+                    if (body.isBlank() || address.isBlank()) { skippedCount++; continue }
+                    try {
+                        val values = ContentValues().apply {
+                            put(Telephony.Sms.ADDRESS, address)
+                            put(Telephony.Sms.BODY, body)
+                            put(Telephony.Sms.DATE, msg.optLong("date", System.currentTimeMillis()))
+                            put(Telephony.Sms.TYPE, msg.optInt("type", 1))
+                            put(Telephony.Sms.READ, if (msg.optBoolean("read", true)) 1 else 0)
+                            put(Telephony.Sms.PERSON, msg.optString("person", ""))
+                        }
+                        val uri = context.contentResolver.insert(Uri.parse(SMS_URI), values)
+                        if (uri != null) restoredCount++ else skippedCount++
+                    } catch (e: Exception) {
+                        skippedCount++
+                    }
+                }
+                return BackupResult(BackupType.SMS, restoredCount > 0, itemCount = restoredCount,
+                    errorMessage = if (skippedCount > 0) "跳过/失败${skippedCount}条" else null)
+            }
 
             val hasPrivilege = ShizukuHelper.hasPrivilege()
 

@@ -83,6 +83,26 @@ fun BackupMainScreen() {
 
     val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
 
+    // 请求"默认短信App"身份用的launcher和待恢复目录暂存
+    var pendingRestoreDir by remember { mutableStateOf<File?>(null) }
+    val smsRoleLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        // 不管用户同不同意，都继续走恢复流程（同意了会用更可靠的方式写入，不同意则退回shell方案）
+        pendingRestoreDir?.let { doRestore(it) }
+        pendingRestoreDir = null
+    }
+
+    /** 点击"恢复此备份"：如果这份备份里有短信数据，且当前不是默认短信App，
+     *  先弹系统的"设为默认短信应用"选择框，用户处理完之后再真正开始恢复 */
+    fun startRestore(dir: File) {
+        val hasSms = BackupEngine.getBackupFilesByType(dir)[BackupType.SMS]?.isNotEmpty() == true
+        if (hasSms && !SmsRoleHelper.isDefaultSmsApp(context) && SmsRoleHelper.isRoleAvailable(context)) {
+            pendingRestoreDir = dir
+            smsRoleLauncher.launch(SmsRoleHelper.getRequestRoleIntent(context))
+        } else {
+            doRestore(dir)
+        }
+    }
+
     fun reloadHistory() {
         history = BackupEngine.getBackupHistory(context).map { dir ->
             BackupHistoryItem(dir.name, dir, dir.lastModified(),
@@ -252,7 +272,7 @@ fun BackupMainScreen() {
                     val dir = selectedBackupDir
                     if (dir != null) {
                         ExtendedFloatingActionButton(
-                            onClick = { doRestore(dir) },
+                            onClick = { startRestore(dir) },
                             containerColor = MaterialTheme.colorScheme.tertiaryContainer,
                             contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
                             icon = { Icon(Icons.Filled.RestorePage, null) },
