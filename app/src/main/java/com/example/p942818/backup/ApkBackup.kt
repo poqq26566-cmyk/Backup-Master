@@ -187,17 +187,35 @@ object ApkBackup {
         }
     }
 
-    /** 用 pm install-create/install-write/install-commit 会话方式安装一个或多个 apk 文件，
-     *  文件内容通过管道(cat | pm install-write)传给pm，不需要system_server直接打开源文件路径 */
+    /** 用 pm install-create/install-write/install-commit 会话方式安装一个或多个 apk 文件。
+     *  参考 SAI 的做法：每一步都单独执行一条 shell 命令，在 Kotlin 里解析结果，
+     *  不把 session id 放在一条命令里用 shell 变量传递，避免嵌套引号/子shell出错 */
     private fun installViaSession(apkFiles: List<File>): ShizukuHelper.CommandResult {
-        val sb = StringBuilder()
-        sb.append("SESSION=\$(pm install-create -r | grep -o '[0-9]\\+' | head -1); ")
-        apkFiles.forEachIndexed { idx, f ->
-            val path = f.absolutePath
-            sb.append("SIZE=\$(wc -c < \"$path\"); ")
-            sb.append("cat \"$path\" | pm install-write -S \$SIZE \$SESSION $idx.apk; ")
+        // 1. 创建安装会话
+        val createResult = ShizukuHelper.execWithPrivilege("pm install-create -r")
+        val createOut = (createResult.stdout + createResult.stderr)
+        val sessionId = Regex("\\[(\\d+)]").find(createOut)?.groupValues?.get(1)
+            ?: Regex("(\\d+)").find(createOut)?.value
+        if (sessionId == null) {
+            return ShizukuHelper.CommandResult(-1, "", "创建安装会话失败: ${createOut.take(200)}")
         }
-        sb.append("pm install-commit \$SESSION")
-        return ShizukuHelper.execWithPrivilege(sb.toString())
+
+        // 2. 依次写入每个 apk 文件（通过管道传内容，不依赖system_server直接读源文件路径）
+        for ((idx, f) in apkFiles.withIndex()) {
+            val path = f.absolutePath
+            val writeCmd = "cat \"$path\" | pm install-write -S ${f.length()} $sessionId $idx.apk"
+            val writeResult = ShizukuHelper.execWithPrivilege(writeCmd)
+            val writeOut = (writeResult.stdout + writeResult.stderr)
+            if (!writeResult.isSuccess || writeOut.contains("Exception", ignoreCase = true) ||
+                writeOut.contains("Error", ignoreCase = true)
+            ) {
+                // 写入失败，放弃这次会话
+                ShizukuHelper.execWithPrivilege("pm install-abandon $sessionId")
+                return ShizukuHelper.CommandResult(-1, "", "写入 ${f.name} 失败: ${writeOut.take(200)}")
+            }
+        }
+
+        // 3. 提交安装
+        return ShizukuHelper.execWithPrivilege("pm install-commit $sessionId")
     }
 }
