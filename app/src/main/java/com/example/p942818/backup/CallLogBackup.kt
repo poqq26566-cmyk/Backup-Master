@@ -14,10 +14,8 @@ import java.util.Locale
 
 /**
  * 通话记录备份模块 - 导出/导入通话记录
- * 读取优先走 Shizuku/Root shell（跟短信同一套逻辑），因为部分厂商 ROM 即使系统权限
- * 显示"已允许"，普通 ContentResolver 查询依然会被静默拦截、返回空结果，
- * 只有 shell 提权能绕过这层限制；没有提权时才退回普通方式（参考 sms-ie）。
- * 写入相对没有这个限制，用普通 ContentResolver 即可。
+ * 参考 sms-ie 项目的做法：普通的 READ_CALL_LOG / WRITE_CALL_LOG 权限 +
+ * 标准 ContentResolver 就够了，不需要 Shizuku/Root。
  */
 object CallLogBackup {
 
@@ -34,9 +32,11 @@ object CallLogBackup {
     fun getAllCallLogs(context: Context): List<CallLogRecord> {
         val callList = mutableListOf<CallLogRecord>()
         try {
+            // 之前这里拼了 "${DEFAULT_SORT_ORDER} ASC"，而 DEFAULT_SORT_ORDER 本身就是
+            // "date DESC"，拼接后变成非法SQL "date DESC ASC"，部分系统会静默返回空结果集
+            // 而不报错。参考 sms-ie 的做法，排序参数直接传 null，交给系统默认顺序即可。
             context.contentResolver.query(
-                CallLog.Calls.CONTENT_URI, null, null, null,
-                "${CallLog.Calls.DEFAULT_SORT_ORDER} ASC"
+                CallLog.Calls.CONTENT_URI, null, null, null, null
             )?.use { c ->
                 val idIdx = c.getColumnIndex(CallLog.Calls._ID)
                 val numberIdx = c.getColumnIndex(CallLog.Calls.NUMBER)
@@ -74,63 +74,11 @@ object CallLogBackup {
         return when { h > 0 -> "${h}时${m}分${s}秒"; m > 0 -> "${m}分${s}秒"; else -> "${s}秒" }
     }
 
-    /** 通过 Shizuku/Root shell 执行 content query 读取通话记录（绕过部分厂商 ROM 对普通App的读取限制） */
-    fun getAllCallLogsViaShell(): List<CallLogRecord> {
-        val callList = mutableListOf<CallLogRecord>()
-        try {
-            val result = ShizukuHelper.execWithPrivilege("content query --uri content://call_log/calls/")
-            if (!result.isSuccess) return emptyList()
-            result.stdout.lineSequence().forEach { line ->
-                if (!line.trimStart().startsWith("Row:")) return@forEach
-                val fields = parseContentQueryLine(line)
-                val date = fields["date"]?.toLongOrNull() ?: 0L
-                val duration = fields["duration"]?.toLongOrNull() ?: 0L
-                val type = fields["type"]?.toIntOrNull() ?: 0
-                callList.add(CallLogRecord(
-                    id = fields["_id"]?.toLongOrNull() ?: 0L,
-                    number = fields["number"]?.takeIf { it != "NULL" } ?: "",
-                    name = fields["name"]?.takeIf { it != "NULL" },
-                    date = date,
-                    dateString = if (date > 0) dateFormat.format(Date(date)) else "",
-                    duration = duration,
-                    durationString = formatDuration(duration),
-                    type = type, typeString = typeMap[type] ?: "未知",
-                    countryIso = fields["countryiso"]?.takeIf { it != "NULL" },
-                    geocodedLocation = fields["geocoded_location"]?.takeIf { it != "NULL" }
-                ))
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "通过shell读取通话记录失败", e)
-        }
-        return callList
-    }
-
-    /** 解析 content query 输出的一行 */
-    private fun parseContentQueryLine(line: String): Map<String, String> {
-        val trimmed = line.trimStart()
-        val firstSpace = trimmed.indexOf(' ')
-        val secondSpace = if (firstSpace >= 0) trimmed.indexOf(' ', firstSpace + 1) else -1
-        val body = if (secondSpace >= 0) trimmed.substring(secondSpace + 1) else trimmed
-        val parts = body.split(Regex(", (?=[a-zA-Z_][a-zA-Z0-9_]*=)"))
-        val map = mutableMapOf<String, String>()
-        for (p in parts) {
-            val eq = p.indexOf('=')
-            if (eq > 0) {
-                map[p.substring(0, eq).trim()] = p.substring(eq + 1).trim()
-            }
-        }
-        return map
-    }
-
-    /** 导出通话记录备份：有提权优先走shell（绕过厂商限制），没有则用普通ContentResolver；
-     *  如果有提权但shell读到0条，再兜底试一次普通方式，双重保险 */
+    /** 导出通话记录备份（普通ContentResolver读取，需要 READ_CALL_LOG 权限） */
     fun backupToJson(context: Context, backupDir: File): BackupResult {
         return try {
             val callDir = File(backupDir, "CallLog").also { it.mkdirs() }
-            var logs = if (ShizukuHelper.hasPrivilege()) getAllCallLogsViaShell() else emptyList()
-            if (logs.isEmpty()) {
-                logs = getAllCallLogs(context)
-            }
+            val logs = getAllCallLogs(context)
             val file = File(callDir, "通话记录备份_${fileDateFormat.format(Date())}.json")
             val jsonArray = JSONArray()
             logs.forEach { log ->
