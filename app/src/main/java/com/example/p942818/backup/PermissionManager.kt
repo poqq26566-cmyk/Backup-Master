@@ -18,7 +18,7 @@ object PermissionManager {
     /** 备份功能所需的所有危险权限 */
     val requiredPermissions: Map<BackupType, Array<String>> = mapOf(
         BackupType.SMS to arrayOf(Manifest.permission.READ_SMS),
-        BackupType.CALL_LOG to arrayOf(Manifest.permission.READ_CALL_LOG),
+        BackupType.CALL_LOG to arrayOf(Manifest.permission.READ_CALL_LOG, Manifest.permission.WRITE_CALL_LOG),
         BackupType.WIFI to arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_WIFI_STATE),
         BackupType.APK to if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             arrayOf() // Android 11+ 不需要存储权限，用 getExternalFilesDir
