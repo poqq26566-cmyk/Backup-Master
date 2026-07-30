@@ -139,32 +139,24 @@ object ShizukuHelper {
     /** 通过 Shizuku shell 执行 */
     private fun execWithShizukuShell(command: String): CommandResult {
         return try {
-            val os = java.io.ByteArrayOutputStream()
-            val osErr = java.io.ByteArrayOutputStream()
-
-            val callback = object : rikka.shizuku.Shizuku.OnBinderReceivedListener {
-                override fun onBinderReceived() {}
-            }
-            rikka.shizuku.Shizuku.addBinderReceivedListener(callback)
-
-            // Use Shizuku's newProcess if available, else fallback
-            return try {
-                @Suppress("UNCHECKED_CAST")
-                val process = rikka.shizuku.Shizuku::class.java
-                    .getMethod("newProcess", Array<String>::class.java)
-                    .invoke(null, arrayOf("sh", "-c", command)) as Process
-                val stdout = process.inputStream.bufferedReader().readText()
-                val stderr = process.errorStream.bufferedReader().readText()
-                val exit = process.waitFor()
-                CommandResult(exit, stdout, stderr)
-            } catch (nsme: NoSuchMethodException) {
-                // fallback to root shell
-                execWithRoot(command)
-            } catch (e: Exception) {
-                CommandResult(-1, "", "Shizuku 执行失败: ${e.message}")
-            }
+            // Shizuku 真实方法签名是 newProcess(String[] cmd, String[] env, String dir)，
+            // 必须用 3 个参数去反射查找，否则会找不到方法
+            @Suppress("UNCHECKED_CAST")
+            val process = rikka.shizuku.Shizuku::class.java
+                .getMethod(
+                    "newProcess",
+                    Array<String>::class.java,
+                    Array<String>::class.java,
+                    String::class.java
+                )
+                .invoke(null, arrayOf("sh", "-c", command), null, null) as Process
+            val stdout = process.inputStream.bufferedReader().readText()
+            val stderr = process.errorStream.bufferedReader().readText()
+            val exit = process.waitFor()
+            CommandResult(exit, stdout, stderr)
         } catch (e: Exception) {
-            CommandResult(-1, "", e.message ?: "Shizuku 执行失败")
+            Log.e(TAG, "Shizuku shell 执行失败", e)
+            CommandResult(-1, "", "Shizuku 执行失败: ${e.message}")
         }
     }
 }
