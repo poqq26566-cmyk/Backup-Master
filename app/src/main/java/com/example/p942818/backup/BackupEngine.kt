@@ -16,7 +16,7 @@ object BackupEngine {
 
     private const val TAG = "BackupEngine"
     private val dateFormat = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.getDefault())
-    private const val BACKUP_ROOT = "BackupMaster"
+    private const val BACKUP_ROOT = "备份大师"
 
     val backupTypes = BackupType.entries.toList()
 
