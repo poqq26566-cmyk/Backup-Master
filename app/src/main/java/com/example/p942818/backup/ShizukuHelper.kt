@@ -136,35 +136,54 @@ object ShizukuHelper {
         }
     }
 
-    /** 通过 Shizuku shell 执行 */
+    private var shellService: IShellService? = null
+    private val serviceLock = Any()
+
+    /** 绑定 Shizuku 用户服务（懒加载，只绑定一次） */
+    private fun getShellService(): IShellService? {
+        synchronized(serviceLock) {
+            if (shellService != null) return shellService
+            val latch = java.util.concurrent.CountDownLatch(1)
+            val args = rikka.shizuku.Shizuku.UserServiceArgs(
+                android.content.ComponentName(
+                    "com.example.p942818",
+                    ShellUserService::class.java.name
+                )
+            ).daemon(false).processNameSuffix("shell").debuggable(false).version(1)
+
+            val connection = object : android.content.ServiceConnection {
+                override fun onServiceConnected(name: android.content.ComponentName?, binder: android.os.IBinder?) {
+                    shellService = IShellService.Stub.asInterface(binder)
+                    latch.countDown()
+                }
+                override fun onServiceDisconnected(name: android.content.ComponentName?) {
+                    shellService = null
+                }
+            }
+            try {
+                rikka.shizuku.Shizuku.bindUserService(args, connection)
+                latch.await(5, java.util.concurrent.TimeUnit.SECONDS)
+            } catch (e: Throwable) {
+                Log.e(TAG, "绑定Shizuku用户服务失败", e)
+            }
+            return shellService
+        }
+    }
+
+    /** 通过 Shizuku 用户服务执行 shell 命令 */
     private fun execWithShizukuShell(command: String): CommandResult {
         return try {
-            val os = java.io.ByteArrayOutputStream()
-            val osErr = java.io.ByteArrayOutputStream()
-
-            val callback = object : rikka.shizuku.Shizuku.OnBinderReceivedListener {
-                override fun onBinderReceived() {}
-            }
-            rikka.shizuku.Shizuku.addBinderReceivedListener(callback)
-
-            // Use Shizuku's newProcess if available, else fallback
-            return try {
-                @Suppress("UNCHECKED_CAST")
-                val process = rikka.shizuku.Shizuku::class.java
-                    .getMethod("newProcess", Array<String>::class.java)
-                    .invoke(null, arrayOf("sh", "-c", command)) as Process
-                val stdout = process.inputStream.bufferedReader().readText()
-                val stderr = process.errorStream.bufferedReader().readText()
-                val exit = process.waitFor()
-                CommandResult(exit, stdout, stderr)
-            } catch (nsme: NoSuchMethodException) {
-                // fallback to root shell
-                execWithRoot(command)
-            } catch (e: Exception) {
-                CommandResult(-1, "", "Shizuku 执行失败: ${e.message}")
-            }
+            val service = getShellService()
+                ?: return CommandResult(-1, "", "无法连接Shizuku用户服务，请重新授权Shizuku")
+            val result = service.exec(command)
+            val idx = result.indexOf('\u0000')
+            if (idx < 0) return CommandResult(-1, "", result)
+            val exitCode = result.substring(0, idx).toIntOrNull() ?: -1
+            val output = result.substring(idx + 1)
+            CommandResult(exitCode, output, "")
         } catch (e: Exception) {
-            CommandResult(-1, "", e.message ?: "Shizuku 执行失败")
+            Log.e(TAG, "Shizuku shell 执行失败", e)
+            CommandResult(-1, "", "Shizuku 执行失败: ${e.message}")
         }
     }
 }
