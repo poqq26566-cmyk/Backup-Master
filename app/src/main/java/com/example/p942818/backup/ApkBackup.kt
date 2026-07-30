@@ -108,9 +108,13 @@ object ApkBackup {
         return try {
             // 尝试用 Shizuku/Root 静默安装
             if (ShizukuHelper.hasPrivilege()) {
-                val r = ShizukuHelper.execWithPrivilege(
-                    "pm install -r \"${apkFile.absolutePath}\""
-                )
+                // 公共存储路径(/storage/emulated/0/...)走FUSE，system_server有时读不到，
+                // 先复制到 /data/local/tmp 这个系统能直接访问的目录再安装
+                val tmpPath = "/data/local/tmp/backupmaster_install.apk"
+                val cmd = "cp \"${apkFile.absolutePath}\" \"$tmpPath\" && " +
+                    "pm install -r \"$tmpPath\"; " +
+                    "rm -f \"$tmpPath\""
+                val r = ShizukuHelper.execWithPrivilege(cmd)
                 // pm install 即使 shell 层 exitCode 为 0，也可能实际安装失败，
                 // 必须检查输出内容里是否真的包含 "Success"（系统 pm 命令的标准成功标志）
                 val out = (r.stdout + r.stderr).trim()
