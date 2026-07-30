@@ -38,7 +38,7 @@ object BackupEngine {
 
     /** 获取目录摘要 */
     fun getBackupSummary(backupDir: File): String {
-        val cats = listOf("APK", "SMS", "CallLog", "Wallpaper", "WiFi", "DesktopLayout")
+        val cats = listOf("APK", "SMS", "CallLog", "Wallpaper", "WiFi", "DesktopLayout", "Contacts")
         val parts = mutableListOf<String>()
         for (cat in cats) {
             val catDir = File(backupDir, cat)
@@ -61,6 +61,7 @@ object BackupEngine {
         map[BackupType.WALLPAPER] = File(backupDir, "Wallpaper").takeIf { it.exists() }?.listFiles()?.filter { it.extension == "png" || it.extension == "jpg" } ?: emptyList()
         map[BackupType.WIFI] = File(backupDir, "WiFi").takeIf { it.exists() }?.listFiles()?.filter { it.extension == "json" } ?: emptyList()
         map[BackupType.DESKTOP_LAYOUT] = File(backupDir, "DesktopLayout").takeIf { it.exists() }?.listFiles()?.filter { it.extension == "json" } ?: emptyList()
+        map[BackupType.CONTACTS] = File(backupDir, "Contacts").takeIf { it.exists() }?.listFiles()?.filter { it.extension == "json" } ?: emptyList()
         return map
     }
 
@@ -83,6 +84,7 @@ object BackupEngine {
             BackupType.WALLPAPER -> WallpaperBackup.backupWallpaper(context, backupDir)
             BackupType.WIFI -> WifiBackup.backupToJson(context, backupDir)
             BackupType.DESKTOP_LAYOUT -> DesktopLayoutBackup.backupDesktopLayout(context, backupDir)
+            BackupType.CONTACTS -> ContactsBackup.backupToJson(context, backupDir)
         }
     }
 
@@ -96,6 +98,7 @@ object BackupEngine {
             BackupType.APK -> ApkBackup.installApk(context, file)
             BackupType.WIFI -> WifiBackup.restoreFromJson(context, file)
             BackupType.DESKTOP_LAYOUT -> DesktopLayoutBackup.restoreDesktopLayout(context, file)
+            BackupType.CONTACTS -> ContactsBackup.restoreFromJson(context, file)
         }
     }
 

@@ -26,7 +26,8 @@ object PermissionManager {
             arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
         },
         BackupType.WALLPAPER to arrayOf(),
-        BackupType.DESKTOP_LAYOUT to arrayOf()
+        BackupType.DESKTOP_LAYOUT to arrayOf(),
+        BackupType.CONTACTS to arrayOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS)
     )
 
     /** 所有需要申请的权限合集 */
@@ -75,6 +76,7 @@ object PermissionManager {
             BackupType.APK -> "需要存储权限导出APK文件"
             BackupType.WALLPAPER -> "需要系统壁纸访问权限"
             BackupType.DESKTOP_LAYOUT -> "需要Shizuku/Root提权读取桌面布局"
+            BackupType.CONTACTS -> "需要联系人读写权限来备份/恢复联系人"
         }
     }
 

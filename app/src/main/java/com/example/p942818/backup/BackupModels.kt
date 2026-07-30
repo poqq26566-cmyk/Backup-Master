@@ -16,7 +16,8 @@ enum class BackupType(
     CALL_LOG("通话记录备份", "备份通话记录为JSON格式", "\uD83D\uDCDE"),
     WALLPAPER("壁纸备份", "保存当前桌面壁纸图片", "\uD83D\uDDBC\uFE0F"),
     WIFI("WiFi网络备份", "导出已保存的WiFi网络配置", "\uD83D\uDCF6"),
-    DESKTOP_LAYOUT("桌面布局备份", "备份桌面图标位置与布局", "\uD83D\uDCD1")
+    DESKTOP_LAYOUT("桌面布局备份", "备份桌面图标位置与布局", "\uD83D\uDCD1"),
+    CONTACTS("联系人备份", "备份联系人姓名、电话与邮箱为JSON格式", "\uD83D\uDC64")
 }
 
 /**
@@ -70,6 +71,24 @@ data class CallLogRecord(
     val typeString: String,      // 类型描述
     val countryIso: String?,     // 国家代码
     val geocodedLocation: String? // 地理位置
+)
+
+/**
+ * 联系人电话号码
+ */
+data class ContactPhone(
+    val number: String,
+    val type: Int  // ContactsContract.CommonDataKinds.Phone.TYPE_*
+)
+
+/**
+ * 联系人数据模型
+ */
+data class ContactRecord(
+    val id: Long,
+    val displayName: String,
+    val phones: List<ContactPhone>,
+    val emails: List<String>
 )
 
 /**
