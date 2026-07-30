@@ -45,7 +45,7 @@ private val CardColors = listOf(
     Color(0xFFF5576C), Color(0xFF4FACFE), Color(0xFF00C9FF)
 )
 
-data class BackupTypeItem(val type: BackupType, var selected: Boolean = true)
+data class BackupTypeItem(val type: BackupType, var selected: Boolean = false)
 
 // ========== 页面模式 ==========
 private enum class PageMode { HOME, APP_PICKER, BACKUP_DETAIL, RESTORE_PICK, RESTORE_CONFIRM }
@@ -309,20 +309,24 @@ fun BackupMainScreen() {
                     Spacer(Modifier.height(8.dp))
                     Text("• ${ShizukuHelper.getPrivilegeDescription()}")
                     Spacer(Modifier.height(4.dp))
-                    Text("• ${if (ShizukuHelper.isShizukuInstalled()) "Shizuku 已安装" else "Shizuku 未安装（不影响 Root）"}")
+                    Text("• ${if (PermissionManager.hasAllFilesAccess()) "✅ 所有文件访问权限已授予" else "⚠️ 未授予所有文件访问权限（备份路径将回退到应用私有目录）"}")
                     Spacer(Modifier.height(12.dp))
                     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(0.5f))) {
                         Column(Modifier.padding(12.dp)) {
-                            Text("💡 Shizuku 提权", fontWeight = FontWeight.SemiBold)
-                            Text("备份 WiFi 密码、桌面布局、静默安装/恢复需要 Shizuku/Root 提权。点击下方按钮可请求授权。",
+                            Text("📁 存储路径", fontWeight = FontWeight.SemiBold)
+                            Text(BackupEngine.getBackupRootPathText(context),
                                 style = MaterialTheme.typography.bodySmall)
+                            if (!PermissionManager.hasAllFilesAccess()) {
+                                Spacer(Modifier.height(8.dp))
+                                TextButton(onClick = { PermissionManager.requestAllFilesAccess(context) }) {
+                                    Text("授予所有文件访问权限")
+                                }
+                            }
                         }
                     }
                 }
             },
-            confirmButton = {
-                TextButton(onClick = { showSettings = false; shizukuDialog = true }) { Text("Shizuku 授权") }
-            },
+            confirmButton = {},
             dismissButton = { TextButton(onClick = { showSettings = false }) { Text("关闭") }}
         )
     }

@@ -1,6 +1,8 @@
 package com.example.p942818.backup
 
 import android.content.Context
+import android.os.Build
+import android.os.Environment
 import android.util.Log
 import java.io.File
 import java.text.SimpleDateFormat
@@ -18,10 +20,23 @@ object BackupEngine {
 
     val backupTypes = BackupType.entries.toList()
 
-    /** 获取备份根目录 */
+    /** 获取备份根目录（优先公共存储 /storage/emulated/0/备份大师，无权限时回退到应用私有目录） */
     fun getBackupRootDir(context: Context): File {
+        val publicDir = File(Environment.getExternalStorageDirectory(), BACKUP_ROOT)
+        val canUsePublic = Environment.isExternalStorageManager() ||
+            Build.VERSION.SDK_INT < Build.VERSION_CODES.R
+        if (canUsePublic) {
+            publicDir.mkdirs()
+            if (publicDir.exists() && publicDir.canWrite()) return publicDir
+        }
         val extDir = context.getExternalFilesDir(null)
         return if (extDir != null) File(extDir, BACKUP_ROOT) else File(context.filesDir, BACKUP_ROOT)
+    }
+
+    /** 获取备份根目录的显示路径文本（给设置页展示用） */
+    fun getBackupRootPathText(context: Context): String {
+        val dir = getBackupRootDir(context)
+        return dir.absolutePath
     }
 
     /** 创建带时间戳的备份目录 */
