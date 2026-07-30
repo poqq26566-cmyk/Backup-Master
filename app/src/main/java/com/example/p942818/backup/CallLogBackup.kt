@@ -147,12 +147,18 @@ object CallLogBackup {
         }
     }
 
-    /** ===== 导入/恢复通话记录 ===== */
+    /** 把一个字符串安全地包进单引号里，用于拼shell命令 */
+    private fun shq(s: String): String = "'" + s.replace("'", "'\\''") + "'"
+
+    /** ===== 导入/恢复通话记录 =====
+     *  普通App写通话记录也会被系统限制，有提权时改用 shell 的 content insert 写入 */
     fun restoreFromJson(context: Context, jsonFile: File): BackupResult {
         return try {
             val root = JSONObject(jsonFile.readText())
             val logs = root.getJSONArray("callLogs")
             var restored = 0; var skipped = 0
+            var lastError: String? = null
+            val hasPrivilege = ShizukuHelper.hasPrivilege()
 
             for (i in 0 until logs.length()) {
                 val log = logs.getJSONObject(i)
@@ -160,35 +166,53 @@ object CallLogBackup {
                 val date = log.optLong("date", 0L)
                 val duration = log.optLong("duration", 0L)
                 val type = log.optInt("type", 1)
+                val name = log.optString("name", "")
 
                 if (number.isBlank()) { skipped++; continue }
 
-                // 去重检查
-                val existing = context.contentResolver.query(
-                    CallLog.Calls.CONTENT_URI,
-                    arrayOf(CallLog.Calls._ID),
-                    "${CallLog.Calls.NUMBER}=? AND ${CallLog.Calls.DATE}=? AND ${CallLog.Calls.DURATION}=?",
-                    arrayOf(number, date.toString(), duration.toString()), null
-                )
-                val exists = existing?.use { it.count > 0 } ?: false
-                existing?.close()
-                if (exists) { skipped++; continue }
-
-                val values = ContentValues().apply {
-                    put(CallLog.Calls.NUMBER, number)
-                    put(CallLog.Calls.CACHED_NAME, log.optString("name", ""))
-                    put(CallLog.Calls.DATE, date)
-                    put(CallLog.Calls.DURATION, duration)
-                    put(CallLog.Calls.TYPE, type)
-                    put(CallLog.Calls.COUNTRY_ISO, log.optString("countryIso", ""))
-                    put(CallLog.Calls.GEOCODED_LOCATION, log.optString("geocodedLocation", ""))
-                    put(CallLog.Calls.NEW, 1)
+                if (hasPrivilege) {
+                    val cmd = StringBuilder("content insert --uri content://call_log/calls ")
+                        .append("--bind ${shq("number:s:$number")} ")
+                        .append("--bind date:l:$date ")
+                        .append("--bind duration:l:$duration ")
+                        .append("--bind type:i:$type ")
+                    if (name.isNotBlank()) cmd.append("--bind ${shq("name:s:$name")} ")
+                    val r = ShizukuHelper.execWithPrivilege(cmd.toString())
+                    val out = (r.stdout + r.stderr).trim()
+                    if (r.isSuccess && !out.contains("Error", ignoreCase = true) &&
+                        !out.contains("Exception", ignoreCase = true)
+                    ) {
+                        restored++
+                    } else {
+                        skipped++
+                        if (out.isNotBlank()) lastError = out.take(150)
+                    }
+                } else {
+                    try {
+                        val values = ContentValues().apply {
+                            put(CallLog.Calls.NUMBER, number)
+                            put(CallLog.Calls.CACHED_NAME, name)
+                            put(CallLog.Calls.DATE, date)
+                            put(CallLog.Calls.DURATION, duration)
+                            put(CallLog.Calls.TYPE, type)
+                            put(CallLog.Calls.NEW, 1)
+                        }
+                        val uri = context.contentResolver.insert(CallLog.Calls.CONTENT_URI, values)
+                        if (uri != null) restored++ else skipped++
+                    } catch (e: Exception) {
+                        skipped++
+                        lastError = e.message
+                    }
                 }
-                context.contentResolver.insert(CallLog.Calls.CONTENT_URI, values)
-                restored++
             }
-            BackupResult(BackupType.CALL_LOG, true, itemCount = restored,
-                errorMessage = if (skipped > 0) "跳过${skipped}条已存在" else null)
+
+            val msgParts = mutableListOf<String>()
+            if (skipped > 0) msgParts.add("跳过/失败${skipped}条")
+            if (!hasPrivilege) msgParts.add("未授权Shizuku/Root可能导致大量写入失败")
+            if (lastError != null) msgParts.add("最后错误: $lastError")
+
+            BackupResult(BackupType.CALL_LOG, restored > 0, itemCount = restored,
+                errorMessage = if (msgParts.isNotEmpty()) msgParts.joinToString(" · ") else null)
         } catch (e: SecurityException) {
             BackupResult(BackupType.CALL_LOG, false, errorMessage = "需要通话记录写入权限（可能需要 Shizuku/Root）")
         } catch (e: Exception) {

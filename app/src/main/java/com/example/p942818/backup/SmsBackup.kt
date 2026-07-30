@@ -28,7 +28,6 @@ object SmsBackup {
         1 to "收件箱", 2 to "已发送", 3 to "草稿", 4 to "发件箱",
         5 to "失败", 6 to "队列中"
     )
-    private val typeReverse = typeMap.entries.associate { it.value to it.key }
 
     fun getAllSms(context: Context): List<SmsRecord> {
         val smsList = mutableListOf<SmsRecord>()
@@ -114,6 +113,9 @@ object SmsBackup {
         return map
     }
 
+    /** 把一个字符串安全地包进单引号里，用于拼shell命令，防止内容里有引号/特殊字符把命令搞坏 */
+    private fun shq(s: String): String = "'" + s.replace("'", "'\\''") + "'"
+
     /** 导出短信备份（JSON） */
     fun backupToJson(context: Context, backupDir: File): BackupResult {
         return try {
@@ -144,7 +146,9 @@ object SmsBackup {
         }
     }
 
-    /** ===== 导入/恢复短信 ===== */
+    /** ===== 导入/恢复短信 =====
+     *  普通App没法直接写系统短信数据库（Android只允许"默认短信App"写入），
+     *  所以有提权时改用 shell 的 content insert 命令写入，绕过这个限制 */
     fun restoreFromJson(context: Context, jsonFile: File): BackupResult {
         return try {
             val jsonStr = jsonFile.readText()
@@ -152,6 +156,9 @@ object SmsBackup {
             val messages = root.getJSONArray("messages")
             var restoredCount = 0
             var skippedCount = 0
+            var lastError: String? = null
+
+            val hasPrivilege = ShizukuHelper.hasPrivilege()
 
             for (i in 0 until messages.length()) {
                 val msg = messages.getJSONObject(i)
@@ -159,40 +166,55 @@ object SmsBackup {
                 val address = msg.optString("address", "")
                 val date = msg.optLong("date", System.currentTimeMillis())
                 val type = msg.optInt("type", 1)
+                val read = if (msg.optBoolean("read", true)) 1 else 0
 
                 if (body.isBlank() || address.isBlank()) { skippedCount++; continue }
 
-                // 检查是否已存在
-                val existing = context.contentResolver.query(
-                    Uri.parse(SMS_URI),
-                    arrayOf(Telephony.Sms._ID),
-                    "${Telephony.Sms.ADDRESS}=? AND ${Telephony.Sms.BODY}=? AND ${Telephony.Sms.DATE}=?",
-                    arrayOf(address, body, date.toString()), null
-                )
-                val exists = existing?.use { it.count > 0 } ?: false
-                existing?.close()
-                if (exists) { skippedCount++; continue }
-
-                val values = ContentValues().apply {
-                    put(Telephony.Sms.ADDRESS, address)
-                    put(Telephony.Sms.BODY, body)
-                    put(Telephony.Sms.DATE, date)
-                    put(Telephony.Sms.TYPE, type)
-                    put(Telephony.Sms.READ, msg.optBoolean("read", true))
-                    put(Telephony.Sms.PERSON, msg.optString("person", ""))
-                    put(Telephony.Sms.SUBJECT, "")
-                    put(Telephony.Sms.STATUS, -1)
-                    put(Telephony.Sms.PROTOCOL, 0)
-                    put(Telephony.Sms.REPLY_PATH_PRESENT, 0)
-                    put(Telephony.Sms.SERVICE_CENTER, "")
+                if (hasPrivilege) {
+                    val cmd = "content insert --uri content://sms " +
+                        "--bind ${shq("address:s:$address")} " +
+                        "--bind ${shq("body:s:$body")} " +
+                        "--bind date:l:$date " +
+                        "--bind type:i:$type " +
+                        "--bind read:i:$read"
+                    val r = ShizukuHelper.execWithPrivilege(cmd)
+                    val out = (r.stdout + r.stderr).trim()
+                    if (r.isSuccess && !out.contains("Error", ignoreCase = true) &&
+                        !out.contains("Exception", ignoreCase = true)
+                    ) {
+                        restoredCount++
+                    } else {
+                        skippedCount++
+                        if (out.isNotBlank()) lastError = out.take(150)
+                    }
+                } else {
+                    // 没有提权的话，只有当前App恰好是默认短信App时才可能写入成功
+                    try {
+                        val values = ContentValues().apply {
+                            put(Telephony.Sms.ADDRESS, address)
+                            put(Telephony.Sms.BODY, body)
+                            put(Telephony.Sms.DATE, date)
+                            put(Telephony.Sms.TYPE, type)
+                            put(Telephony.Sms.READ, read)
+                            put(Telephony.Sms.PERSON, msg.optString("person", ""))
+                        }
+                        val uri = context.contentResolver.insert(Uri.parse(SMS_URI), values)
+                        if (uri != null) restoredCount++ else skippedCount++
+                    } catch (e: Exception) {
+                        skippedCount++
+                        lastError = e.message
+                    }
                 }
-                context.contentResolver.insert(Uri.parse(SMS_URI), values)
-                restoredCount++
             }
 
-            BackupResult(BackupType.SMS, true,
+            val msgParts = mutableListOf<String>()
+            if (skippedCount > 0) msgParts.add("跳过/失败${skippedCount}条")
+            if (!hasPrivilege) msgParts.add("未授权Shizuku/Root可能导致大量写入失败")
+            if (lastError != null) msgParts.add("最后错误: $lastError")
+
+            BackupResult(BackupType.SMS, restoredCount > 0,
                 itemCount = restoredCount,
-                errorMessage = if (skippedCount > 0) "跳过${skippedCount}条已存在" else null)
+                errorMessage = if (msgParts.isNotEmpty()) msgParts.joinToString(" · ") else null)
         } catch (e: SecurityException) {
             BackupResult(BackupType.SMS, false, errorMessage = "需要短信写入权限（可能需要 Shizuku/Root）")
         } catch (e: Exception) {
