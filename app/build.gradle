@@ -50,6 +50,7 @@ dependencies {
     implementation 'androidx.compose.material3:material3:1.3.1'
     // 代码里用了 Icons.Filled.* 全量图标 + AutoMirrored.Filled.ArrowBack
     implementation 'androidx.compose.material:material-icons-core:1.6.0'
+    implementation 'androidx.compose.material:material-icons-extended:1.6.0'
 
     // 各 backup/*.kt 用了 kotlinx.coroutines.{launch,delay,Dispatchers,withContext}
     implementation 'org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3'

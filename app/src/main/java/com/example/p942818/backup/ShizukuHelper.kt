@@ -76,6 +76,33 @@ object ShizukuHelper {
         }
     }
 
+    /** 添加 Shizuku 权限授权结果监听器（在 MainActivity onCreate 里调用一次） */
+    fun addPermissionResultListener(onResult: (granted: Boolean) -> Unit) {
+        try {
+            rikka.shizuku.Shizuku.addRequestPermissionResultListener { _, grantResult ->
+                val granted = grantResult == android.content.pm.PackageManager.PERMISSION_GRANTED
+                if (granted) {
+                    privilegeLevel = PrivilegeLevel.SHIZUKU
+                }
+                onResult(granted)
+            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "添加权限监听器失败", e)
+        }
+    }
+
+    /** 添加 Shizuku 绑定监听器，Shizuku 服务连接上时自动重新检测权限 */
+    fun addBinderReceivedListener(onReceived: () -> Unit) {
+        try {
+            rikka.shizuku.Shizuku.addBinderReceivedListener {
+                detectPrivilege()
+                onReceived()
+            }
+        } catch (e: Throwable) {
+            Log.e(TAG, "添加绑定监听器失败", e)
+        }
+    }
+
     /** 执行命令（优先 Root，其次 Shizuku，最后普通 shell） */
     fun execWithPrivilege(command: String): CommandResult {
         return when (privilegeLevel) {
