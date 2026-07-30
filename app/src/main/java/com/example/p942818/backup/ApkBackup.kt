@@ -147,15 +147,16 @@ object ApkBackup {
 
             // 优先用 Shizuku/Root 通过 pm session 方式安装（支持分包，且用管道传输文件内容，
             // 不依赖 system_server 直接读公共存储路径，规避 FUSE 权限问题）
+            // 只要检测到有权限，就必须走这条路并明确返回成功/失败，绝不能静默退化到
+            // 普通"打开方式"安装流程，否则用户会看到莫名其妙的系统选择框
             if (ShizukuHelper.hasPrivilege()) {
                 val r = installViaSession(apkFiles)
                 val out = (r.stdout + r.stderr).trim()
-                if (r.isSuccess && out.contains("Success", ignoreCase = true)) {
-                    return BackupResult(BackupType.APK, true, itemCount = 1)
-                }
-                if (out.isNotBlank()) {
-                    return BackupResult(BackupType.APK, false,
-                        errorMessage = "提权安装失败: ${out.take(200)}")
+                return if (r.isSuccess && out.contains("Success", ignoreCase = true)) {
+                    BackupResult(BackupType.APK, true, itemCount = 1)
+                } else {
+                    BackupResult(BackupType.APK, false,
+                        errorMessage = "提权安装失败: ${out.ifBlank { "未知错误（命令未返回任何输出）" }.take(200)}")
                 }
             }
 
