@@ -69,6 +69,7 @@ fun BackupMainScreen() {
     var allApps by remember { mutableStateOf<List<ApkBackup.InstalledApp>>(emptyList()) }
     var selectedApps by remember { mutableStateOf<Set<String>>(emptySet()) }
     var appSearch by remember { mutableStateOf("") }
+    var showAuthRequiredDialog by remember { mutableStateOf(false) }
 
     BackHandler(enabled = mode != PageMode.HOME) {
         mode = PageMode.HOME
@@ -213,6 +214,10 @@ fun BackupMainScreen() {
                         ExtendedFloatingActionButton(
                             onClick = {
                                 if (isBusy) return@ExtendedFloatingActionButton
+                                if (!ShizukuHelper.hasPrivilege() || !PermissionManager.hasAllFilesAccess()) {
+                                    showAuthRequiredDialog = true
+                                    return@ExtendedFloatingActionButton
+                                }
                                 val sel = items.filter { it.selected }.map { it.type }
                                 if (sel.isEmpty()) { Toast.makeText(context, "请选择备份项", Toast.LENGTH_SHORT).show(); return@ExtendedFloatingActionButton }
                                 val missing = mutableListOf<String>()
@@ -292,6 +297,52 @@ fun BackupMainScreen() {
         ShizukuAuthDialog(
             onDismiss = { shizukuDialog = false },
             context = context
+        )
+    }
+
+    // ====== 备份前授权引导弹窗 ======
+    if (showAuthRequiredDialog) {
+        AlertDialog(
+            onDismissRequest = { showAuthRequiredDialog = false },
+            title = { Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(Icons.Filled.Shield, null, Modifier.size(22.dp))
+                Spacer(Modifier.width(8.dp)); Text("需要先授权")
+            }},
+            text = {
+                Column {
+                    Text("备份需要以下权限才能正常工作，请先完成授权：")
+                    Spacer(Modifier.height(16.dp))
+                    if (!ShizukuHelper.hasPrivilege()) {
+                        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(0.4f))) {
+                            Column(Modifier.padding(12.dp)) {
+                                Text("⚠️ Shizuku / Root 未授权", fontWeight = FontWeight.SemiBold)
+                                Text("短信、通话记录、WiFi密码、桌面布局等备份需要提权才能正常读取",
+                                    style = MaterialTheme.typography.bodySmall)
+                                Spacer(Modifier.height(8.dp))
+                                TextButton(onClick = { showAuthRequiredDialog = false; shizukuDialog = true }) {
+                                    Text("去授权 Shizuku")
+                                }
+                            }
+                        }
+                        Spacer(Modifier.height(8.dp))
+                    }
+                    if (!PermissionManager.hasAllFilesAccess()) {
+                        Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer.copy(0.4f))) {
+                            Column(Modifier.padding(12.dp)) {
+                                Text("⚠️ 所有文件访问权限 未授予", fontWeight = FontWeight.SemiBold)
+                                Text("需要此权限才能把备份文件存到 /storage/emulated/0/备份大师",
+                                    style = MaterialTheme.typography.bodySmall)
+                                Spacer(Modifier.height(8.dp))
+                                TextButton(onClick = { PermissionManager.requestAllFilesAccess(context) }) {
+                                    Text("去授予所有文件访问权限")
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {},
+            dismissButton = { TextButton(onClick = { showAuthRequiredDialog = false }) { Text("关闭") } }
         )
     }
 
