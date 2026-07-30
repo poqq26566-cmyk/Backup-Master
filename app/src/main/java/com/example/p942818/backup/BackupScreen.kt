@@ -70,9 +70,15 @@ fun BackupMainScreen() {
     var selectedApps by remember { mutableStateOf<Set<String>>(emptySet()) }
     var appSearch by remember { mutableStateOf("") }
     var showAuthRequiredDialog by remember { mutableStateOf(false) }
+    // 记录进入"备份详情"页之前是从哪个页面来的，返回时回到那个页面而不是直接回首页
+    var detailCameFrom by remember { mutableStateOf(PageMode.HOME) }
 
     BackHandler(enabled = mode != PageMode.HOME) {
-        mode = PageMode.HOME
+        if (mode == PageMode.BACKUP_DETAIL) {
+            mode = detailCameFrom
+        } else {
+            mode = PageMode.HOME
+        }
         restoreResults = emptyList()
     }
     var appLoading by remember { mutableStateOf(false) }
@@ -200,7 +206,10 @@ fun BackupMainScreen() {
                 },
                 navigationIcon = {
                     if (mode != PageMode.HOME) {
-                        IconButton(onClick = { mode = PageMode.HOME; restoreResults = emptyList() }) {
+                        IconButton(onClick = {
+                            mode = if (mode == PageMode.BACKUP_DETAIL) detailCameFrom else PageMode.HOME
+                            restoreResults = emptyList()
+                        }) {
                             Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回")
                         }
                     }
@@ -289,7 +298,7 @@ fun BackupMainScreen() {
             PageMode.HOME -> HomeContent(pad, context, items, isBusy, progress, progressText, history, showAllHistory,
                 onToggleAll = { showAllHistory = it },
                 onToggleItem = { t -> items = items.map { if (it.type == t) it.copy(selected = !it.selected) else it } },
-                onBackupDetail = { dir -> selectedBackupDir = dir; mode = PageMode.BACKUP_DETAIL },
+                onBackupDetail = { dir -> selectedBackupDir = dir; detailCameFrom = PageMode.HOME; mode = PageMode.BACKUP_DETAIL },
                 onDeleteHistory = { dir -> scope.launch { withContext(Dispatchers.IO) { BackupEngine.deleteBackup(dir) }; reloadHistory() } },
                 onShizukuRequest = { shizukuDialog = true }
             )
@@ -308,7 +317,7 @@ fun BackupMainScreen() {
                 onCancel = { mode = PageMode.HOME }
             )
             PageMode.BACKUP_DETAIL -> BackupDetailContent(pad, selectedBackupDir, context)
-            PageMode.RESTORE_PICK -> RestorePickContent(pad, history, onPick = { dir -> selectedBackupDir = dir; mode = PageMode.BACKUP_DETAIL })
+            PageMode.RESTORE_PICK -> RestorePickContent(pad, history, onPick = { dir -> selectedBackupDir = dir; detailCameFrom = PageMode.RESTORE_PICK; mode = PageMode.BACKUP_DETAIL })
             PageMode.RESTORE_CONFIRM -> RestoreResultContent(pad, restoreResults)
         }
     }
@@ -613,8 +622,9 @@ private fun RestorePickContent(pad: PaddingValues, history: List<BackupHistoryIt
                     }
                     Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(h.name, fontWeight = FontWeight.Medium)
-                        Text(h.summary, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(if (h.summary != "空备份") h.summary else "空备份",
+                            fontWeight = FontWeight.Medium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        Text(tf.format(Date(h.time)), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Text(formatSize(h.size), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant.copy(0.6f))
                     }
                     Icon(Icons.Filled.ChevronRight, null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
