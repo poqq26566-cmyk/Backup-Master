@@ -149,6 +149,9 @@ object ApkBackup {
             // 不依赖 system_server 直接读公共存储路径，规避 FUSE 权限问题）
             // 只要检测到有权限，就必须走这条路并明确返回成功/失败，绝不能静默退化到
             // 普通"打开方式"安装流程，否则用户会看到莫名其妙的系统选择框
+            // 注意：这里强制重新检测一次权限，而不是用App启动时缓存的旧状态——
+            // 因为Shizuku的绑定是异步的，冷启动瞬间检测很可能拿到"未授权"的假结果
+            ShizukuHelper.detectPrivilege()
             if (ShizukuHelper.hasPrivilege()) {
                 val r = installViaSession(apkFiles)
                 val out = (r.stdout + r.stderr).trim()
