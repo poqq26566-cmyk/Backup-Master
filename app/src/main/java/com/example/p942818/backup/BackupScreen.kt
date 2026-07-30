@@ -305,21 +305,18 @@ fun BackupMainScreen() {
             }},
             text = {
                 Column {
-                    Text("权限状态", fontWeight = FontWeight.SemiBold)
-                    Spacer(Modifier.height(8.dp))
-                    Text("• ${ShizukuHelper.getPrivilegeDescription()}")
-                    Spacer(Modifier.height(4.dp))
-                    Text("• ${if (PermissionManager.hasAllFilesAccess()) "✅ 所有文件访问权限已授予" else "⚠️ 未授予所有文件访问权限（备份路径将回退到应用私有目录）"}")
-                    Spacer(Modifier.height(12.dp))
                     Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer.copy(0.5f))) {
                         Column(Modifier.padding(12.dp)) {
                             Text("📁 存储路径", fontWeight = FontWeight.SemiBold)
-                            Text(BackupEngine.getBackupRootPathText(context),
+                            Text("/storage/emulated/0/备份大师",
                                 style = MaterialTheme.typography.bodySmall)
                             if (!PermissionManager.hasAllFilesAccess()) {
                                 Spacer(Modifier.height(8.dp))
+                                Text("需要授予\"所有文件访问权限\"才能写入此路径", style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.error)
+                                Spacer(Modifier.height(4.dp))
                                 TextButton(onClick = { PermissionManager.requestAllFilesAccess(context) }) {
-                                    Text("授予所有文件访问权限")
+                                    Text("去授权")
                                 }
                             }
                         }
