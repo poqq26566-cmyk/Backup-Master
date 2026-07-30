@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+   按需声明云备份/设备迁移的包含/排除规则，例如：
+   <cloud-backup>
+       <include domain="sharedpref" path="."/>
+       <exclude domain="sharedpref" path="device.xml"/>
+   </cloud-backup>
+-->
+<data-extraction-rules>
+    <cloud-backup />
+    <device-transfer />
+</data-extraction-rules>

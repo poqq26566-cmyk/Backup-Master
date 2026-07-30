@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    package="com.example.p942818">
+
+    <!-- 备份App所需权限 -->
+    <uses-permission android:name="android.permission.READ_SMS" />
+    <uses-permission android:name="android.permission.READ_CALL_LOG" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="28" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SET_WALLPAPER" />
+    <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES" />
+
+    <!-- 查询应用列表（Android 11+ 兼容） -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+        </intent>
+    </queries>
+
+    <!-- 桌面布局备份依赖 Shizuku/Root 提权 -->
+
+    <application
+        android:name=".CrashApp"
+        android:label="@string/app_name"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:theme="@style/AppTheme"
+        android:allowBackup="true"
+        android:fullBackupContent="@xml/backup_rules"
+        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:hardwareAccelerated="true"
+        android:resizeableActivity="true">
+
+        <!-- Declare full-screen / tall-screen support. Without this, some ROMs cap the window at
+             the legacy 1.86 aspect ratio and letterbox the app with black bars (the system bars
+             then can't be colored by the app). 2.4 covers up to ~24:9 displays. -->
+        <meta-data android:name="android.max_aspect" android:value="2.4" />
+        <meta-data android:name="android.vendor.full_screen" android:value="true" />
+        <meta-data android:name="notch.config" android:value="portrait|landscape" />
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!-- Crash viewer: runs in its own process with a plain framework theme so it can render the
+             stack trace even when the AppCompat theme is what blew up. android:name handler lives in
+             CrashApp; this activity only displays the trace passed to it. -->
+        <activity
+            android:name=".CrashActivity"
+            android:exported="false"
+            android:process=":crash"
+            android:theme="@android:style/Theme.Material.Light" />
+
+    </application>
+</manifest>
