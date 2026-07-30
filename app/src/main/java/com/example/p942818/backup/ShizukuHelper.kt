@@ -186,4 +186,46 @@ object ShizukuHelper {
             CommandResult(-1, "", "Shizuku 执行失败: ${e.message}")
         }
     }
+
+    /** 在独立线程里跑一段可能会卡死的调用，超过 timeoutSec 秒还没返回就放弃并报超时，
+     *  避免真的遇到底层死锁时把整个恢复流程无限期卡住 */
+    private fun <T> runWithTimeout(timeoutSec: Long, block: () -> T): T? {
+        val executor = java.util.concurrent.Executors.newSingleThreadExecutor()
+        return try {
+            val future = executor.submit(java.util.concurrent.Callable { block() })
+            future.get(timeoutSec, java.util.concurrent.TimeUnit.SECONDS)
+        } catch (e: java.util.concurrent.TimeoutException) {
+            null
+        } catch (e: Exception) {
+            Log.e(TAG, "runWithTimeout 执行失败", e)
+            null
+        } finally {
+            executor.shutdownNow()
+        }
+    }
+
+    /** 批量插入短信,一次调用直接在提权进程内部写完，比逐条exec快得多。
+     *  返回 "OK:成功数:失败数" 或 "ERROR:xxx"，null 表示服务连不上或超时 */
+    fun bulkInsertSms(jsonArray: String): String? {
+        return runWithTimeout(15) {
+            try {
+                getShellService()?.bulkInsertSms(jsonArray)
+            } catch (e: Exception) {
+                Log.e(TAG, "批量插入短信失败", e)
+                "ERROR:${e.message}"
+            }
+        } ?: "ERROR:操作超时(15秒)，可能是提权进程写入短信时被系统卡住了"
+    }
+
+    /** 批量插入通话记录，同上 */
+    fun bulkInsertCallLog(jsonArray: String): String? {
+        return runWithTimeout(15) {
+            try {
+                getShellService()?.bulkInsertCallLog(jsonArray)
+            } catch (e: Exception) {
+                Log.e(TAG, "批量插入通话记录失败", e)
+                "ERROR:${e.message}"
+            }
+        } ?: "ERROR:操作超时(15秒)，可能是提权进程写入通话记录时被系统卡住了"
+    }
 }
