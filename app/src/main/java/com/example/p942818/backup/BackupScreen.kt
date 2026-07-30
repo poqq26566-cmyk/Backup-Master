@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.widget.Toast
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -68,6 +69,11 @@ fun BackupMainScreen() {
     var allApps by remember { mutableStateOf<List<ApkBackup.InstalledApp>>(emptyList()) }
     var selectedApps by remember { mutableStateOf<Set<String>>(emptySet()) }
     var appSearch by remember { mutableStateOf("") }
+
+    BackHandler(enabled = mode != PageMode.HOME) {
+        mode = PageMode.HOME
+        restoreResults = emptyList()
+    }
     var appLoading by remember { mutableStateOf(false) }
     var backupContainApk by remember { mutableStateOf(false) }
 
@@ -567,7 +573,7 @@ private fun RestoreResultContent(pad: PaddingValues, results: List<RestoreResult
         items(results) { r ->
             Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = if (r.success) MaterialTheme.colorScheme.surfaceVariant.copy(0.3f) else Color(0xFFE53935).copy(0.08f))) {
                 Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(if (r.success) Icons.Filled.CheckCircle else Icons.Filled.Close, null,
+                    Icon(if (r.success) Icons.Filled.CheckCircle else Icons.Filled.Error, null,
                         modifier = Modifier.size(18.dp), tint = if (r.success) Color(0xFF4CAF50) else Color(0xFFE53935))
                     Spacer(Modifier.width(8.dp))
                     Column(Modifier.weight(1f)) {
