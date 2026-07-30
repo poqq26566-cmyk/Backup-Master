@@ -23,7 +23,8 @@ object ApkBackup {
         val packageName: String, val appName: String,
         val versionName: String, val versionCode: Long,
         val sourceDir: String, val isSystemApp: Boolean,
-        val firstInstallTime: Long, val lastUpdateTime: Long
+        val firstInstallTime: Long, val lastUpdateTime: Long,
+        val splitSourceDirs: List<String> = emptyList() // 分包App(Split APK)的额外split文件路径
     )
 
     fun getInstalledApps(context: Context, includeSystem: Boolean = false): List<InstalledApp> {
@@ -35,13 +36,15 @@ object ApkBackup {
             .map { pkg ->
                 val label = pkg.applicationInfo?.loadLabel(pm)?.toString() ?: pkg.packageName
                 val srcDir = pkg.applicationInfo?.sourceDir ?: ""
+                val splits = pkg.applicationInfo?.splitSourceDirs?.toList() ?: emptyList()
                 InstalledApp(
                     packageName = pkg.packageName, appName = label,
                     versionName = pkg.versionName ?: "未知",
                     versionCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) pkg.longVersionCode
                     else @Suppress("DEPRECATION") pkg.versionCode.toLong(),
                     sourceDir = srcDir, isSystemApp = isSystemApp(pkg),
-                    firstInstallTime = pkg.firstInstallTime, lastUpdateTime = pkg.lastUpdateTime
+                    firstInstallTime = pkg.firstInstallTime, lastUpdateTime = pkg.lastUpdateTime,
+                    splitSourceDirs = splits
                 )
             }
     }
@@ -53,31 +56,56 @@ object ApkBackup {
         FileInputStream(src).use { input -> FileOutputStream(dst).use { input.copyTo(it) } }
     }
 
-    /** 导出单个 APK */
+    /** 导出单个 APK（如果是分包App，会把base+所有split都存进同一个文件夹里） */
     fun backupApk(context: Context, app: InstalledApp, backupDir: File): BackupResult {
         return try {
             val dir = File(backupDir, "APK").also { it.mkdirs() }
             val safeName = app.appName.replace(Regex("[/\\\\:*?\"<>|]"), "_")
             val ver = app.versionName.replace(Regex("[/\\\\:*?\"<>|]"), "_")
-            val file = File(dir, "${safeName}_v${ver}.apk")
-            if (file.exists()) file.delete()
 
-            // 尝试提权复制，失败则用普通复制
-            if (ShizukuHelper.hasPrivilege()) {
-                val r = ShizukuHelper.execWithPrivilege("cp \"${app.sourceDir}\" \"${file.absolutePath}\"")
-                if (!r.isSuccess || !file.exists() || file.length() == 0L) {
-                    copyFile(app.sourceDir, file)
-                }
-            } else {
-                copyFile(app.sourceDir, file)
+            if (app.splitSourceDirs.isEmpty()) {
+                // 普通单文件App
+                val file = File(dir, "${safeName}_v${ver}.apk")
+                if (file.exists()) file.delete()
+                copyOne(app.sourceDir, file)
+                return if (file.exists() && file.length() > 0)
+                    BackupResult(BackupType.APK, true, file.absolutePath, file.length(), 1)
+                else
+                    BackupResult(BackupType.APK, false, errorMessage = "APK 文件复制失败")
             }
 
-            if (file.exists() && file.length() > 0)
-                BackupResult(BackupType.APK, true, file.absolutePath, file.length(), 1)
+            // 分包App：存到一个以App命名的文件夹里，base.apk + split_0.apk, split_1.apk...
+            val bundleDir = File(dir, "${safeName}_v${ver}").also {
+                if (it.exists()) it.deleteRecursively()
+                it.mkdirs()
+            }
+            val baseFile = File(bundleDir, "base.apk")
+            copyOne(app.sourceDir, baseFile)
+            var totalSize = baseFile.length()
+            app.splitSourceDirs.forEachIndexed { idx, splitPath ->
+                val splitFile = File(bundleDir, "split_$idx.apk")
+                copyOne(splitPath, splitFile)
+                totalSize += splitFile.length()
+            }
+
+            if (baseFile.exists() && baseFile.length() > 0)
+                BackupResult(BackupType.APK, true, bundleDir.absolutePath, totalSize, 1)
             else
-                BackupResult(BackupType.APK, false, errorMessage = "APK 文件复制失败")
+                BackupResult(BackupType.APK, false, errorMessage = "分包 APK 复制失败")
         } catch (e: Exception) {
             BackupResult(BackupType.APK, false, errorMessage = "备份失败: ${e.message}")
+        }
+    }
+
+    /** 复制单个文件，优先提权复制，失败则普通复制 */
+    private fun copyOne(src: String, dst: File) {
+        if (ShizukuHelper.hasPrivilege()) {
+            val r = ShizukuHelper.execWithPrivilege("cp \"$src\" \"${dst.absolutePath}\"")
+            if (!r.isSuccess || !dst.exists() || dst.length() == 0L) {
+                copyFile(src, dst)
+            }
+        } else {
+            copyFile(src, dst)
         }
     }
 
@@ -103,33 +131,42 @@ object ApkBackup {
         }
     }
 
-    /** ===== 安装 APK（恢复） ===== */
-    fun installApk(context: Context, apkFile: File): BackupResult {
+    /** ===== 安装 APK（恢复） =====
+     *  target 可以是单个 .apk 文件，也可以是分包App的文件夹（里面有 base.apk + split_N.apk） */
+    fun installApk(context: Context, target: File): BackupResult {
         return try {
-            // 尝试用 Shizuku/Root 静默安装
+            val apkFiles: List<File> = if (target.isDirectory) {
+                target.listFiles()?.filter { it.extension == "apk" }
+                    ?.sortedBy { if (it.name == "base.apk") "" else it.name } ?: emptyList()
+            } else {
+                listOf(target)
+            }
+            if (apkFiles.isEmpty()) {
+                return BackupResult(BackupType.APK, false, errorMessage = "没有找到可安装的 APK 文件")
+            }
+
+            // 优先用 Shizuku/Root 通过 pm session 方式安装（支持分包，且用管道传输文件内容，
+            // 不依赖 system_server 直接读公共存储路径，规避 FUSE 权限问题）
             if (ShizukuHelper.hasPrivilege()) {
-                // 公共存储路径(/storage/emulated/0/...)走FUSE，system_server有时读不到，
-                // 先复制到 /data/local/tmp 这个系统能直接访问的目录再安装
-                val tmpPath = "/data/local/tmp/backupmaster_install.apk"
-                val cmd = "cp \"${apkFile.absolutePath}\" \"$tmpPath\" && " +
-                    "pm install -r \"$tmpPath\"; " +
-                    "rm -f \"$tmpPath\""
-                val r = ShizukuHelper.execWithPrivilege(cmd)
-                // pm install 即使 shell 层 exitCode 为 0，也可能实际安装失败，
-                // 必须检查输出内容里是否真的包含 "Success"（系统 pm 命令的标准成功标志）
+                val r = installViaSession(apkFiles)
                 val out = (r.stdout + r.stderr).trim()
                 if (r.isSuccess && out.contains("Success", ignoreCase = true)) {
                     return BackupResult(BackupType.APK, true, itemCount = 1)
                 }
                 if (out.isNotBlank()) {
-                    // 明确失败（比如 Failure [INSTALL_FAILED_...]），直接返回失败原因，不再回退掩盖问题
                     return BackupResult(BackupType.APK, false,
                         errorMessage = "提权安装失败: ${out.take(200)}")
                 }
-                // 无任何输出（可能shell命令本身没跑起来），回退到普通安装界面
             }
 
-            // 普通 Intent 安装（会跳转到系统安装确认界面，需要用户手动点击"安装"才会真正完成）
+            // 没有提权时，分包App无法通过普通安装界面直接装（系统安装器一次只吃一个文件），
+            // 只有单文件App能走这条路
+            if (apkFiles.size > 1) {
+                return BackupResult(BackupType.APK, false,
+                    errorMessage = "此App为分包安装(共${apkFiles.size}个文件)，需要先授权 Shizuku/Root 才能恢复")
+            }
+
+            val apkFile = apkFiles[0]
             val uri: Uri
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 val authority = "${context.packageName}.fileprovider"
@@ -143,12 +180,24 @@ object ApkBackup {
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             context.startActivity(intent)
-            // 注意：这里只是打开了系统安装界面，并不代表已经安装完成，
-            // 不能标记为 success=true，否则会误导用户以为已经恢复成功
             BackupResult(BackupType.APK, false, itemCount = 0,
                 errorMessage = "已打开系统安装界面，请在弹出窗口中点击\"安装\"完成恢复（未授权Shizuku/Root时无法自动安装）")
         } catch (e: Exception) {
             BackupResult(BackupType.APK, false, errorMessage = "安装失败: ${e.message}")
         }
+    }
+
+    /** 用 pm install-create/install-write/install-commit 会话方式安装一个或多个 apk 文件，
+     *  文件内容通过管道(cat | pm install-write)传给pm，不需要system_server直接打开源文件路径 */
+    private fun installViaSession(apkFiles: List<File>): ShizukuHelper.CommandResult {
+        val sb = StringBuilder()
+        sb.append("SESSION=\$(pm install-create -r | grep -o '[0-9]\\+' | head -1); ")
+        apkFiles.forEachIndexed { idx, f ->
+            val path = f.absolutePath
+            sb.append("SIZE=\$(wc -c < \"$path\"); ")
+            sb.append("cat \"$path\" | pm install-write -S \$SIZE \$SESSION $idx.apk; ")
+        }
+        sb.append("pm install-commit \$SESSION")
+        return ShizukuHelper.execWithPrivilege(sb.toString())
     }
 }
