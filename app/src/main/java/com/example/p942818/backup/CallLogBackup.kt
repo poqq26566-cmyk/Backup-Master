@@ -151,68 +151,71 @@ object CallLogBackup {
     private fun shq(s: String): String = "'" + s.replace("'", "'\\''") + "'"
 
     /** ===== 导入/恢复通话记录 =====
-     *  普通App写通话记录也会被系统限制，有提权时改用 shell 的 content insert 写入 */
+     *  跟短信一样，用shell的content insert命令合并成一条批量执行，
+     *  不用"提权进程内直接ContentResolver.insert"（那种方式已证实会卡死） */
     fun restoreFromJson(context: Context, jsonFile: File): BackupResult {
         return try {
             val root = JSONObject(jsonFile.readText())
             val logs = root.getJSONArray("callLogs")
-            var restored = 0; var skipped = 0
-            var lastError: String? = null
             val hasPrivilege = ShizukuHelper.hasPrivilege()
 
+            if (hasPrivilege) {
+                val cmds = mutableListOf<String>()
+                var skippedBlank = 0
+                for (i in 0 until logs.length()) {
+                    val log = logs.getJSONObject(i)
+                    val number = log.optString("number", "")
+                    if (number.isBlank()) { skippedBlank++; continue }
+                    val date = log.optLong("date", 0L)
+                    val duration = log.optLong("duration", 0L)
+                    val type = log.optInt("type", 1)
+                    val name = log.optString("name", "")
+                    val sb = StringBuilder("content insert --uri content://call_log/calls ")
+                        .append("--bind ${shq("number:s:$number")} ")
+                        .append("--bind date:l:$date --bind duration:l:$duration --bind type:i:$type")
+                    if (name.isNotBlank()) sb.append(" --bind ${shq("name:s:$name")}")
+                    cmds.add(sb.toString())
+                }
+                if (cmds.isEmpty()) {
+                    return BackupResult(BackupType.CALL_LOG, false, errorMessage = "没有可恢复的通话记录数据")
+                }
+                val fullCmd = cmds.joinToString(" ; ")
+                val r = ShizukuHelper.execWithPrivilege(fullCmd)
+                val out = (r.stdout + r.stderr)
+                val failCount = Regex("(Error|Exception)", RegexOption.IGNORE_CASE).findAll(out).count()
+                val success = (cmds.size - failCount).coerceAtLeast(0)
+                val totalSkipped = failCount + skippedBlank
+                return BackupResult(BackupType.CALL_LOG, success > 0, itemCount = success,
+                    errorMessage = if (totalSkipped > 0) "跳过/失败${totalSkipped}条" else null)
+            }
+
+            // 没有提权，走普通ContentResolver（一般写不进去，除非本App是特殊系统权限App）
+            var restored = 0; var skipped = 0; var lastError: String? = null
             for (i in 0 until logs.length()) {
                 val log = logs.getJSONObject(i)
                 val number = log.optString("number", "")
-                val date = log.optLong("date", 0L)
-                val duration = log.optLong("duration", 0L)
-                val type = log.optInt("type", 1)
-                val name = log.optString("name", "")
-
                 if (number.isBlank()) { skipped++; continue }
-
-                if (hasPrivilege) {
-                    val cmd = StringBuilder("content insert --uri content://call_log/calls ")
-                        .append("--bind ${shq("number:s:$number")} ")
-                        .append("--bind date:l:$date ")
-                        .append("--bind duration:l:$duration ")
-                        .append("--bind type:i:$type ")
-                    if (name.isNotBlank()) cmd.append("--bind ${shq("name:s:$name")} ")
-                    val r = ShizukuHelper.execWithPrivilege(cmd.toString())
-                    val out = (r.stdout + r.stderr).trim()
-                    if (r.isSuccess && !out.contains("Error", ignoreCase = true) &&
-                        !out.contains("Exception", ignoreCase = true)
-                    ) {
-                        restored++
-                    } else {
-                        skipped++
-                        if (out.isNotBlank()) lastError = out.take(150)
+                try {
+                    val values = ContentValues().apply {
+                        put(CallLog.Calls.NUMBER, number)
+                        put(CallLog.Calls.CACHED_NAME, log.optString("name", ""))
+                        put(CallLog.Calls.DATE, log.optLong("date", 0L))
+                        put(CallLog.Calls.DURATION, log.optLong("duration", 0L))
+                        put(CallLog.Calls.TYPE, log.optInt("type", 1))
+                        put(CallLog.Calls.NEW, 1)
                     }
-                } else {
-                    try {
-                        val values = ContentValues().apply {
-                            put(CallLog.Calls.NUMBER, number)
-                            put(CallLog.Calls.CACHED_NAME, name)
-                            put(CallLog.Calls.DATE, date)
-                            put(CallLog.Calls.DURATION, duration)
-                            put(CallLog.Calls.TYPE, type)
-                            put(CallLog.Calls.NEW, 1)
-                        }
-                        val uri = context.contentResolver.insert(CallLog.Calls.CONTENT_URI, values)
-                        if (uri != null) restored++ else skipped++
-                    } catch (e: Exception) {
-                        skipped++
-                        lastError = e.message
-                    }
+                    val uri = context.contentResolver.insert(CallLog.Calls.CONTENT_URI, values)
+                    if (uri != null) restored++ else skipped++
+                } catch (e: Exception) {
+                    skipped++; lastError = e.message
                 }
             }
-
             val msgParts = mutableListOf<String>()
             if (skipped > 0) msgParts.add("跳过/失败${skipped}条")
-            if (!hasPrivilege) msgParts.add("未授权Shizuku/Root可能导致大量写入失败")
+            msgParts.add("未授权Shizuku/Root可能导致大量写入失败")
             if (lastError != null) msgParts.add("最后错误: $lastError")
-
             BackupResult(BackupType.CALL_LOG, restored > 0, itemCount = restored,
-                errorMessage = if (msgParts.isNotEmpty()) msgParts.joinToString(" · ") else null)
+                errorMessage = msgParts.joinToString(" · "))
         } catch (e: SecurityException) {
             BackupResult(BackupType.CALL_LOG, false, errorMessage = "需要通话记录写入权限（可能需要 Shizuku/Root）")
         } catch (e: Exception) {
