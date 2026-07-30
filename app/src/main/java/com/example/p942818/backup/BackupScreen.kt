@@ -567,7 +567,7 @@ private fun RestoreResultContent(pad: PaddingValues, results: List<RestoreResult
         items(results) { r ->
             Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = if (r.success) MaterialTheme.colorScheme.surfaceVariant.copy(0.3f) else Color(0xFFE53935).copy(0.08f))) {
                 Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Icon(if (r.success) Icons.Filled.CheckCircle else Icons.Filled.Error, null,
+                    Icon(if (r.success) Icons.Filled.CheckCircle else Icons.Filled.Close, null,
                         modifier = Modifier.size(18.dp), tint = if (r.success) Color(0xFF4CAF50) else Color(0xFFE53935))
                     Spacer(Modifier.width(8.dp))
                     Column(Modifier.weight(1f)) {
