@@ -67,11 +67,58 @@ object SmsBackup {
         return smsList
     }
 
+    /** 通过 Shizuku/Root shell 执行 content query 读取短信（绕过部分厂商 ROM 对普通App的读取限制） */
+    fun getAllSmsViaShell(): List<SmsRecord> {
+        val smsList = mutableListOf<SmsRecord>()
+        try {
+            val result = ShizukuHelper.execWithPrivilege("content query --uri content://sms/")
+            if (!result.isSuccess) return emptyList()
+            result.stdout.lineSequence().forEach { line ->
+                if (!line.trimStart().startsWith("Row:")) return@forEach
+                val fields = parseContentQueryLine(line)
+                val dateMs = fields["date"]?.toLongOrNull() ?: 0L
+                val type = fields["type"]?.toIntOrNull() ?: 0
+                smsList.add(SmsRecord(
+                    id = fields["_id"]?.toLongOrNull() ?: 0L,
+                    address = fields["address"]?.takeIf { it != "NULL" } ?: "",
+                    person = fields["person"]?.takeIf { it != "NULL" },
+                    date = dateMs,
+                    dateString = if (dateMs > 0) dateFormat.format(Date(dateMs)) else "",
+                    body = fields["body"]?.takeIf { it != "NULL" } ?: "",
+                    type = type,
+                    typeString = typeMap[type] ?: "未知",
+                    read = fields["read"] == "1",
+                    threadId = fields["thread_id"]?.toLongOrNull()
+                ))
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "通过shell读取短信失败", e)
+        }
+        return smsList
+    }
+
+    /** 解析 content query 输出的一行，格式如："Row: 0 _id=1, thread_id=2, address=123, body=你好, type=1" */
+    private fun parseContentQueryLine(line: String): Map<String, String> {
+        val trimmed = line.trimStart()
+        val firstSpace = trimmed.indexOf(' ')
+        val secondSpace = if (firstSpace >= 0) trimmed.indexOf(' ', firstSpace + 1) else -1
+        val body = if (secondSpace >= 0) trimmed.substring(secondSpace + 1) else trimmed
+        val parts = body.split(Regex(", (?=[a-zA-Z_][a-zA-Z0-9_]*=)"))
+        val map = mutableMapOf<String, String>()
+        for (p in parts) {
+            val eq = p.indexOf('=')
+            if (eq > 0) {
+                map[p.substring(0, eq).trim()] = p.substring(eq + 1).trim()
+            }
+        }
+        return map
+    }
+
     /** 导出短信备份（JSON） */
     fun backupToJson(context: Context, backupDir: File): BackupResult {
         return try {
             val smsDir = File(backupDir, "SMS").also { it.mkdirs() }
-            val smsList = getAllSms(context)
+            val smsList = if (ShizukuHelper.hasPrivilege()) getAllSmsViaShell() else getAllSms(context)
             val file = File(smsDir, "短信备份_${fileDateFormat.format(Date())}.json")
 
             val jsonArray = JSONArray()
