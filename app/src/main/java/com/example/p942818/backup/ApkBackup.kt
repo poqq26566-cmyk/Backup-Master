@@ -111,13 +111,21 @@ object ApkBackup {
                 val r = ShizukuHelper.execWithPrivilege(
                     "pm install -r \"${apkFile.absolutePath}\""
                 )
-                if (r.isSuccess) {
+                // pm install 即使 shell 层 exitCode 为 0，也可能实际安装失败，
+                // 必须检查输出内容里是否真的包含 "Success"（系统 pm 命令的标准成功标志）
+                val out = (r.stdout + r.stderr).trim()
+                if (r.isSuccess && out.contains("Success", ignoreCase = true)) {
                     return BackupResult(BackupType.APK, true, itemCount = 1)
                 }
-                // 失败则回退到 Activity 安装
+                if (out.isNotBlank()) {
+                    // 明确失败（比如 Failure [INSTALL_FAILED_...]），直接返回失败原因，不再回退掩盖问题
+                    return BackupResult(BackupType.APK, false,
+                        errorMessage = "提权安装失败: ${out.take(200)}")
+                }
+                // 无任何输出（可能shell命令本身没跑起来），回退到普通安装界面
             }
 
-            // 普通 Intent 安装
+            // 普通 Intent 安装（会跳转到系统安装确认界面，需要用户手动点击"安装"才会真正完成）
             val uri: Uri
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
                 val authority = "${context.packageName}.fileprovider"
@@ -131,7 +139,10 @@ object ApkBackup {
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
             }
             context.startActivity(intent)
-            BackupResult(BackupType.APK, true, itemCount = 1, errorMessage = "已启动安装界面")
+            // 注意：这里只是打开了系统安装界面，并不代表已经安装完成，
+            // 不能标记为 success=true，否则会误导用户以为已经恢复成功
+            BackupResult(BackupType.APK, false, itemCount = 0,
+                errorMessage = "已打开系统安装界面，请在弹出窗口中点击\"安装\"完成恢复（未授权Shizuku/Root时无法自动安装）")
         } catch (e: Exception) {
             BackupResult(BackupType.APK, false, errorMessage = "安装失败: ${e.message}")
         }
