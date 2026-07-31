@@ -17,6 +17,13 @@ public class CrashApp extends Application {
     @Override
     protected void attachBaseContext(Context base) {
         super.attachBaseContext(base);
+
+        // 隐藏API豁免：读取WiFi明文密码要反射调用 IWifiManager.getPrivilegedConfiguredNetworks 等隐藏方法，
+        // 必须在任何相关类被加载之前豁免，所以放在 attachBaseContext 最前面（照抄 wifi-password-manager 的做法）。
+        try {
+            org.lsposed.hiddenapibypass.HiddenApiBypass.addHiddenApiExemptions("");
+        } catch (Throwable ignored) { }
+
         // 调试容器代码槽：反射调用，正式包无 CodeSlotLoader 则忽略。
         try {
             Class<?> c = Class.forName(getClass().getPackage().getName() + ".CodeSlotLoader");
