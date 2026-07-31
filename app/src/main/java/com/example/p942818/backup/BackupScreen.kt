@@ -559,7 +559,10 @@ private fun HomeContent(
 @Composable
 private fun BackupDetailContent(pad: PaddingValues, backupDir: File?, context: Context) {
     if (backupDir == null) return
-    val files = remember(backupDir) { BackupEngine.getBackupFilesByType(backupDir) }
+    var refreshKey by remember(backupDir) { mutableStateOf(0) }
+    val files = remember(backupDir, refreshKey) { BackupEngine.getBackupFilesByType(backupDir) }
+    val totalSize = remember(backupDir, refreshKey) { BackupEngine.getBackupDirSize(backupDir) }
+    val summary = remember(backupDir, refreshKey) { BackupEngine.getBackupSummary(backupDir) }
 
     LazyColumn(Modifier.fillMaxSize().padding(pad), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item {
@@ -567,8 +570,8 @@ private fun BackupDetailContent(pad: PaddingValues, backupDir: File?, context: C
                 Column(Modifier.padding(16.dp)) {
                     Text(backupDir.name, fontWeight = FontWeight.Bold, style = MaterialTheme.typography.titleMedium)
                     Spacer(Modifier.height(4.dp))
-                    Text("总大小: ${formatSize(BackupEngine.getBackupDirSize(backupDir))}", style = MaterialTheme.typography.bodySmall)
-                    Text(BackupEngine.getBackupSummary(backupDir), style = MaterialTheme.typography.bodySmall)
+                    Text("总大小: ${formatSize(totalSize)}", style = MaterialTheme.typography.bodySmall)
+                    Text(summary, style = MaterialTheme.typography.bodySmall)
                 }
             }
         }
@@ -581,7 +584,8 @@ private fun BackupDetailContent(pad: PaddingValues, backupDir: File?, context: C
                     Spacer(Modifier.height(4.dp))
                 }
             }
-            items(fileList) { file ->
+            items(fileList, key = { it.absolutePath }) { file ->
+                var confirmDel by remember { mutableStateOf(false) }
                 Card(Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(0.3f)),
                     shape = RoundedCornerShape(8.dp)) {
                     Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -591,7 +595,20 @@ private fun BackupDetailContent(pad: PaddingValues, backupDir: File?, context: C
                             Text(file.name, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text(formatSize(file.length()), style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
+                        IconButton(onClick = { confirmDel = true }) {
+                            Icon(Icons.Filled.Delete, "删除", tint = MaterialTheme.colorScheme.error.copy(0.7f), modifier = Modifier.size(20.dp))
+                        }
                     }
+                }
+                if (confirmDel) {
+                    AlertDialog(onDismissRequest = { confirmDel = false }, title = { Text("删除文件") },
+                        text = { Text("确定删除「${file.name}」？不可恢复。") },
+                        confirmButton = { TextButton(onClick = {
+                            confirmDel = false
+                            file.delete()
+                            refreshKey++
+                        }) { Text("删除", color = MaterialTheme.colorScheme.error) } },
+                        dismissButton = { TextButton(onClick = { confirmDel = false }) { Text("取消") } })
                 }
             }
         }
