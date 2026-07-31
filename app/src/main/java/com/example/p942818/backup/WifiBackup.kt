@@ -1,12 +1,21 @@
 package com.example.p942818.backup
 
+import android.content.AttributionSource
+import android.content.AttributionSourceHidden
 import android.content.Context
+import android.net.wifi.IWifiManager
 import android.net.wifi.WifiConfiguration
+import android.net.wifi.WifiConfigurationHidden
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.Bundle
 import android.util.Log
+import dev.rikka.tools.refine.Refine
 import org.json.JSONArray
 import org.json.JSONObject
+import rikka.shizuku.Shizuku
+import rikka.shizuku.ShizukuBinderWrapper
+import rikka.shizuku.SystemServiceHelper
 import java.io.File
 import java.io.FileWriter
 import java.text.SimpleDateFormat
@@ -19,16 +28,65 @@ import java.util.Locale
 object WifiBackup {
 
     private const val TAG = "WifiBackup"
+    private const val SHELL_PACKAGE = "com.android.shell"
     private val df = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
     private val fileDf = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.getDefault())
 
     data class WifiEntry(val ssid: String, val psk: String, val keyMgmt: String)
 
-    /** 获取已保存的 WiFi 列表（含密码，需提权） */
+    /** 通过 Shizuku 调用系统隐藏API `getPrivilegedConfiguredNetworks`，能拿到明文密码，
+     *  不依赖 wpa_supplicant.conf 这类在 Android10+ 已经不存在的文件（照抄 wifi-password-manager 的做法） */
+    private fun getWifiListViaShizukuPrivilegedApi(): List<WifiEntry> {
+        if (!ShizukuHelper.isShizukuGranted()) return emptyList()
+        return try {
+            val wifiManager = SystemServiceHelper.getSystemService(Context.WIFI_SERVICE)
+                .let(::ShizukuBinderWrapper)
+                .let(IWifiManager.Stub::asInterface)
+
+            val user = when (Shizuku.getUid()) {
+                0 -> "root"; 1000 -> "system"; else -> "shell"
+            }
+
+            val extras = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                val attributionSource: AttributionSource = Refine.unsafeCast(
+                    AttributionSourceHidden(Shizuku.getUid(), SHELL_PACKAGE, SHELL_PACKAGE, null, null)
+                )
+                Bundle().apply { putParcelable("EXTRA_PARAM_KEY_ATTRIBUTION_SOURCE", attributionSource) }
+            } else null
+
+            val configs = WifiManagerHelper.getWifiConfigurations(
+                wifiManager = wifiManager, packageName = user, featureId = SHELL_PACKAGE, extras = extras
+            )
+            configs.map { config ->
+                val hidden = Refine.unsafeCast<WifiConfigurationHidden>(config)
+                WifiEntry(
+                    ssid = hidden.SSID?.trim('"') ?: "",
+                    psk = hidden.preSharedKey?.trim('"') ?: "",
+                    keyMgmt = when {
+                        hidden.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.SAE) -> "SAE"
+                        hidden.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.WPA2_PSK) -> "WPA2"
+                        hidden.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.WPA_PSK) -> "WPA"
+                        hidden.allowedKeyManagement.get(WifiConfiguration.KeyMgmt.NONE) -> "NONE"
+                        else -> "WPA"
+                    }
+                )
+            }.filter { it.ssid.isNotBlank() }
+        } catch (e: Exception) {
+            Log.e(TAG, "通过Shizuku隐藏API读取WiFi失败", e)
+            emptyList()
+        }
+    }
+
+    /** 获取已保存的 WiFi 列表（含密码）
+     *  优先级：① Shizuku隐藏API（新系统首选，能拿明文密码）
+     *        ② wpa_supplicant.conf（仅老系统 <Android10 还有效，留作兜底）
+     *        ③ 系统公开API（拿不到密码，最后兜底，且只在 <Android13 才会真正读到东西） */
     fun getWifiList(context: Context): List<WifiEntry> {
+        val viaShizuku = getWifiListViaShizukuPrivilegedApi()
+        if (viaShizuku.isNotEmpty()) return viaShizuku
+
         val entries = mutableListOf<WifiEntry>()
 
-        // 先通过 Root/Shizuku 读取 wpa_supplicant.conf
         if (ShizukuHelper.hasPrivilege()) {
             val paths = listOf(
                 "/data/misc/wifi/wpa_supplicant.conf",
@@ -120,7 +178,6 @@ object WifiBackup {
                 val keyMgmt = net.optString("keyMgmt", "WPA")
                 if (ssid.isBlank()) continue
 
-                // 用 wpa_cli 添加网络
                 val cmds = """
                     wpa_cli -i wlan0 add_network 2>/dev/null
                     wpa_cli -i wlan0 set_network 0 ssid '"$ssid"' 2>/dev/null
