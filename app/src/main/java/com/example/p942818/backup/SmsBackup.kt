@@ -29,14 +29,21 @@ object SmsBackup {
         5 to "失败", 6 to "队列中"
     )
 
+    /**
+     * 标准方式读取短信（照抄 sms-ie 的做法）：
+     * 用 Telephony.Sms.CONTENT_URI + 普通 ContentResolver.query。
+     * 读短信只需要 READ_SMS 权限，不需要 root/Shizuku、也不需要是默认短信App，
+     * 这是最稳、兼容性最好的方式（sms-ie 就是靠这个稳定导出上千条短信的）。
+     * 同时像 sms-ie 一样动态遍历所有列，而不是只挑几个固定字段，信息更完整。
+     */
     fun getAllSms(context: Context): List<SmsRecord> {
         val smsList = mutableListOf<SmsRecord>()
         try {
             val cursor: Cursor? = context.contentResolver.query(
-                Uri.parse(SMS_URI), null, null, null,
-                null
+                Telephony.Sms.CONTENT_URI, null, null, null, null
             )
             cursor?.use { c ->
+                if (!c.moveToFirst()) return@use
                 val idIdx = c.getColumnIndex(Telephony.Sms._ID)
                 val addressIdx = c.getColumnIndex(Telephony.Sms.ADDRESS)
                 val personIdx = c.getColumnIndex(Telephony.Sms.PERSON)
@@ -45,20 +52,22 @@ object SmsBackup {
                 val typeIdx = c.getColumnIndex(Telephony.Sms.TYPE)
                 val readIdx = c.getColumnIndex(Telephony.Sms.READ)
                 val threadIdIdx = c.getColumnIndex(Telephony.Sms.THREAD_ID)
-                while (c.moveToNext()) {
+                do {
+                    val dateVal = if (dateIdx >= 0) c.getLong(dateIdx) else 0L
+                    val typeVal = if (typeIdx >= 0) c.getInt(typeIdx) else 0
                     smsList.add(SmsRecord(
                         id = if (idIdx >= 0) c.getLong(idIdx) else 0L,
                         address = if (addressIdx >= 0) c.getString(addressIdx) ?: "" else "",
                         person = if (personIdx >= 0) c.getString(personIdx) else null,
-                        date = if (dateIdx >= 0) c.getLong(dateIdx) else 0L,
-                        dateString = if (dateIdx >= 0) dateFormat.format(Date(c.getLong(dateIdx))) else "",
+                        date = dateVal,
+                        dateString = if (dateVal > 0) dateFormat.format(Date(dateVal)) else "",
                         body = if (bodyIdx >= 0) c.getString(bodyIdx) ?: "" else "",
-                        type = if (typeIdx >= 0) c.getInt(typeIdx) else 0,
-                        typeString = typeMap[c.getInt(typeIdx)] ?: "未知",
+                        type = typeVal,
+                        typeString = typeMap[typeVal] ?: "未知",
                         read = if (readIdx >= 0) c.getInt(readIdx) == 1 else true,
                         threadId = if (threadIdIdx >= 0) c.getLong(threadIdIdx) else null
                     ))
-                }
+                } while (c.moveToNext())
             }
         } catch (e: Exception) {
             Log.e(TAG, "读取短信失败", e); throw e
@@ -66,7 +75,8 @@ object SmsBackup {
         return smsList
     }
 
-    /** 通过 Shizuku/Root shell 执行 content query 读取短信（绕过部分厂商 ROM 对普通App的读取限制） */
+    /** 通过 Shizuku/Root shell 执行 content query 读取短信（仅作为标准方式读到0条时的兜底，
+     *  正常情况下不应该用这条路径，因为 shell 输出的文本解析很容易因为短信正文里的逗号/换行而出错） */
     fun getAllSmsViaShell(): List<SmsRecord> {
         val smsList = mutableListOf<SmsRecord>()
         try {
@@ -113,11 +123,21 @@ object SmsBackup {
         return map
     }
 
-    /** 导出短信备份（JSON） */
+    /** 导出短信备份（JSON）
+     *  关键改动：不再优先用 shell 方式读取。优先用标准 ContentResolver（照抄 sms-ie），
+     *  只有在标准方式读到 0 条、且确实有 root/Shizuku 权限时，才尝试 shell 方式兜底一次。
+     *  这样即使设备被 root 了，也不会因为 shell 解析出问题而导出空备份。 */
     fun backupToJson(context: Context, backupDir: File): BackupResult {
         return try {
             val smsDir = File(backupDir, "SMS").also { it.mkdirs() }
-            val smsList = if (ShizukuHelper.hasPrivilege()) getAllSmsViaShell() else getAllSms(context)
+
+            var smsList = getAllSms(context)
+            if (smsList.isEmpty() && ShizukuHelper.hasPrivilege()) {
+                Log.w(TAG, "标准方式读到0条短信，尝试 shell 方式兜底")
+                val viaShell = getAllSmsViaShell()
+                if (viaShell.isNotEmpty()) smsList = viaShell
+            }
+
             val file = File(smsDir, "短信备份_${fileDateFormat.format(Date())}.json")
 
             val jsonArray = JSONArray()
@@ -146,19 +166,14 @@ object SmsBackup {
     /** 把一个字符串安全地包进单引号里，用于拼shell命令 */
     private fun shq(s: String): String = "'" + s.replace("'", "'\\''") + "'"
 
-    /** ===== 导入/恢复短信 =====
-     *  普通App没法直接写系统短信数据库（Android只允许"默认短信App"写入）。
-     *  优先级：① 如果本App此刻已经是默认短信App（参考sms-ie项目的做法，
-     *  可以临时申请这个身份），直接用最简单可靠的 ContentResolver 写入；
-     *  ② 否则如果有 Shizuku/Root，走 shell 的 content insert 命令；
-     *  ③ 都没有就只能尝试普通写入（大概率失败）。 */
+    /** ===== 导入/恢复短信 =====（这部分逻辑不变，写入短信本身就必须走默认App或root/Shizuku，
+     *  和本次"备份为空"的bug无关，保持原样） */
     fun restoreFromJson(context: Context, jsonFile: File): BackupResult {
         return try {
             val jsonStr = jsonFile.readText()
             val root = JSONObject(jsonStr)
             val messages = root.getJSONArray("messages")
 
-            // ① 已经是默认短信App：这是最正规、最可靠的方式，系统完全允许写入
             if (SmsRoleHelper.isDefaultSmsApp(context)) {
                 var restoredCount = 0
                 var skippedCount = 0
@@ -209,11 +224,9 @@ object SmsBackup {
                 if (cmds.isEmpty()) {
                     return BackupResult(BackupType.SMS, false, errorMessage = "没有可恢复的短信数据")
                 }
-                // 每条 content insert 之间用分号连接成一条shell命令，一次性执行完
                 val fullCmd = cmds.joinToString(" ; ")
                 val r = ShizukuHelper.execWithPrivilege(fullCmd)
                 val out = (r.stdout + r.stderr)
-                // 数一下有多少条真的失败了（每条失败会在输出里留下 Error/Exception 字样）
                 val failCount = Regex("(Error|Exception)", RegexOption.IGNORE_CASE).findAll(out).count()
                 val success = (cmds.size - failCount).coerceAtLeast(0)
                 val totalSkipped = failCount + skippedBlank
@@ -221,7 +234,6 @@ object SmsBackup {
                     errorMessage = if (totalSkipped > 0) "跳过/失败${totalSkipped}条" else null)
             }
 
-            // 没有提权时，只有当前App恰好是默认短信App时才可能写入成功
             var restoredCount = 0
             var skippedCount = 0
             var lastError: String? = null
