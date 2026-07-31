@@ -30,6 +30,27 @@ object SmsBackup {
     )
 
     /**
+     * 去重检查：判断某条短信（地址+内容+时间完全一致）是否已经存在于系统短信库中。
+     * 读取不需要 root/Shizuku、也不需要是默认短信App，READ_SMS 权限即可查询。
+     * 用于恢复备份前过滤掉已经存在的记录，避免重复恢复导致同一条短信出现多份。
+     */
+    private fun smsExists(context: Context, address: String, body: String, date: Long): Boolean {
+        return try {
+            val cursor = context.contentResolver.query(
+                Uri.parse(SMS_URI),
+                arrayOf(Telephony.Sms._ID),
+                "${Telephony.Sms.ADDRESS} = ? AND ${Telephony.Sms.BODY} = ? AND ${Telephony.Sms.DATE} = ?",
+                arrayOf(address, body, date.toString()),
+                null
+            )
+            cursor?.use { it.moveToFirst() } ?: false
+        } catch (e: Exception) {
+            Log.w(TAG, "smsExists query failed: ${e.message}")
+            false
+        }
+    }
+
+    /**
      * 标准方式读取短信（照抄 sms-ie 的做法）：
      * 用 Telephony.Sms.CONTENT_URI + 普通 ContentResolver.query。
      * 读短信只需要 READ_SMS 权限，不需要 root/Shizuku、也不需要是默认短信App，
@@ -177,16 +198,19 @@ object SmsBackup {
             if (SmsRoleHelper.isDefaultSmsApp(context)) {
                 var restoredCount = 0
                 var skippedCount = 0
+                var duplicateCount = 0
                 for (i in 0 until messages.length()) {
                     val msg = messages.getJSONObject(i)
                     val body = msg.optString("body", "")
                     val address = msg.optString("address", "")
                     if (body.isBlank() || address.isBlank()) { skippedCount++; continue }
+                    val date = msg.optLong("date", System.currentTimeMillis())
+                    if (smsExists(context, address, body, date)) { duplicateCount++; continue }
                     try {
                         val values = ContentValues().apply {
                             put(Telephony.Sms.ADDRESS, address)
                             put(Telephony.Sms.BODY, body)
-                            put(Telephony.Sms.DATE, msg.optLong("date", System.currentTimeMillis()))
+                            put(Telephony.Sms.DATE, date)
                             put(Telephony.Sms.TYPE, msg.optInt("type", 1))
                             put(Telephony.Sms.READ, if (msg.optBoolean("read", true)) 1 else 0)
                             put(Telephony.Sms.PERSON, msg.optString("person", ""))
@@ -197,8 +221,11 @@ object SmsBackup {
                         skippedCount++
                     }
                 }
+                val notes = mutableListOf<String>()
+                if (skippedCount > 0) notes.add("跳过/失败${skippedCount}条")
+                if (duplicateCount > 0) notes.add("已存在跳过${duplicateCount}条")
                 return BackupResult(BackupType.SMS, restoredCount > 0, itemCount = restoredCount,
-                    errorMessage = if (skippedCount > 0) "跳过/失败${skippedCount}条" else null)
+                    errorMessage = if (notes.isNotEmpty()) notes.joinToString(" · ") else null)
             }
 
             val hasPrivilege = ShizukuHelper.hasPrivilege()
@@ -206,12 +233,14 @@ object SmsBackup {
             if (hasPrivilege) {
                 val cmds = mutableListOf<String>()
                 var skippedBlank = 0
+                var duplicateCount = 0
                 for (i in 0 until messages.length()) {
                     val msg = messages.getJSONObject(i)
                     val body = msg.optString("body", "")
                     val address = msg.optString("address", "")
                     if (body.isBlank() || address.isBlank()) { skippedBlank++; continue }
                     val date = msg.optLong("date", System.currentTimeMillis())
+                    if (smsExists(context, address, body, date)) { duplicateCount++; continue }
                     val type = msg.optInt("type", 1)
                     val read = if (msg.optBoolean("read", true)) 1 else 0
                     cmds.add(
@@ -222,31 +251,37 @@ object SmsBackup {
                     )
                 }
                 if (cmds.isEmpty()) {
-                    return BackupResult(BackupType.SMS, false, errorMessage = "没有可恢复的短信数据")
+                    return BackupResult(BackupType.SMS, false,
+                        errorMessage = if (duplicateCount > 0) "已存在跳过${duplicateCount}条，无新短信可恢复" else "没有可恢复的短信数据")
                 }
                 val fullCmd = cmds.joinToString(" ; ")
                 val r = ShizukuHelper.execWithPrivilege(fullCmd)
                 val out = (r.stdout + r.stderr)
                 val failCount = Regex("(Error|Exception)", RegexOption.IGNORE_CASE).findAll(out).count()
                 val success = (cmds.size - failCount).coerceAtLeast(0)
-                val totalSkipped = failCount + skippedBlank
+                val notes = mutableListOf<String>()
+                if (failCount + skippedBlank > 0) notes.add("跳过/失败${failCount + skippedBlank}条")
+                if (duplicateCount > 0) notes.add("已存在跳过${duplicateCount}条")
                 return BackupResult(BackupType.SMS, success > 0, itemCount = success,
-                    errorMessage = if (totalSkipped > 0) "跳过/失败${totalSkipped}条" else null)
+                    errorMessage = if (notes.isNotEmpty()) notes.joinToString(" · ") else null)
             }
 
             var restoredCount = 0
             var skippedCount = 0
+            var duplicateCount = 0
             var lastError: String? = null
             for (i in 0 until messages.length()) {
                 val msg = messages.getJSONObject(i)
                 val body = msg.optString("body", "")
                 val address = msg.optString("address", "")
                 if (body.isBlank() || address.isBlank()) { skippedCount++; continue }
+                val date = msg.optLong("date", System.currentTimeMillis())
+                if (smsExists(context, address, body, date)) { duplicateCount++; continue }
                 try {
                     val values = ContentValues().apply {
                         put(Telephony.Sms.ADDRESS, address)
                         put(Telephony.Sms.BODY, body)
-                        put(Telephony.Sms.DATE, msg.optLong("date", System.currentTimeMillis()))
+                        put(Telephony.Sms.DATE, date)
                         put(Telephony.Sms.TYPE, msg.optInt("type", 1))
                         put(Telephony.Sms.READ, if (msg.optBoolean("read", true)) 1 else 0)
                         put(Telephony.Sms.PERSON, msg.optString("person", ""))
@@ -260,6 +295,7 @@ object SmsBackup {
             }
             val msgParts = mutableListOf<String>()
             if (skippedCount > 0) msgParts.add("跳过/失败${skippedCount}条")
+            if (duplicateCount > 0) msgParts.add("已存在跳过${duplicateCount}条")
             msgParts.add("未授权Shizuku/Root可能导致大量写入失败")
             if (lastError != null) msgParts.add("最后错误: $lastError")
             BackupResult(BackupType.SMS, restoredCount > 0, itemCount = restoredCount,
