@@ -1,0 +1,33 @@
+plugins {
+    id 'com.android.library'
+    id 'dev.rikka.tools.refine'
+}
+
+android {
+    namespace 'com.example.p942818.hidden_api'
+    compileSdk 36
+
+    defaultConfig {
+        minSdk 30
+        consumerProguardFiles "consumer-rules.pro"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    annotationProcessor 'dev.rikka.tools.refine:annotation-processor:4.4.0'
+    compileOnly 'dev.rikka.tools.refine:annotation:4.4.0'
+    compileOnly 'dev.rikka.hidden:stub:4.4.0'
+    implementation 'androidx.annotation:annotation:1.8.0'
+}
