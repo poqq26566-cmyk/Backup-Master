@@ -86,6 +86,8 @@ fun BackupMainScreen() {
 
     // Shizuku 授权状态
     var shizukuDialog by remember { mutableStateOf(false) }
+    // 详情页"删除此空备份"确认弹窗
+    var confirmDeleteWholeBackup by remember { mutableStateOf(false) }
 
     val permLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { }
 
@@ -222,6 +224,14 @@ fun BackupMainScreen() {
                             }
                             IconButton(onClick = { showSettings = true }) {
                                 Icon(Icons.Filled.Settings, "设置")
+                            }
+                        }
+                        PageMode.BACKUP_DETAIL -> {
+                            val dir = selectedBackupDir
+                            if (dir != null && BackupEngine.getBackupDirSize(dir) == 0L) {
+                                IconButton(onClick = { confirmDeleteWholeBackup = true }) {
+                                    Icon(Icons.Filled.Delete, "删除此空备份", tint = MaterialTheme.colorScheme.error)
+                                }
                             }
                         }
                         else -> {}
@@ -406,6 +416,30 @@ fun BackupMainScreen() {
             },
             confirmButton = {},
             dismissButton = { TextButton(onClick = { showSettings = false }) { Text("关闭") }}
+        )
+    }
+
+    // ====== 删除整份空备份确认弹窗 ======
+    if (confirmDeleteWholeBackup) {
+        AlertDialog(
+            onDismissRequest = { confirmDeleteWholeBackup = false },
+            title = { Text("删除备份") },
+            text = { Text("确定删除「${selectedBackupDir?.name}」这份空备份？不可恢复。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    confirmDeleteWholeBackup = false
+                    val dir = selectedBackupDir
+                    if (dir != null) {
+                        scope.launch {
+                            withContext(Dispatchers.IO) { BackupEngine.deleteBackup(dir) }
+                            reloadHistory()
+                            mode = detailCameFrom
+                            selectedBackupDir = null
+                        }
+                    }
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = { TextButton(onClick = { confirmDeleteWholeBackup = false }) { Text("取消") } }
         )
     }
 }
